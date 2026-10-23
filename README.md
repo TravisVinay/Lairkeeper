@@ -3,8 +3,9 @@
 A roguelike where you play the monster. By day you dig a dungeon of 5x5 rooms, pick where the
 entrance and your lair go, lay permanent traps and recruit minions. By night the heroes your
 infamy attracts file in through the gate, and you fight them turn by turn on the map you built.
-Runs are endless: after every boss night (every 5th night) you can build a Stairs room and dig
-a new floor below, move your lair down, and make heroes fight their way through every floor.
+Runs are endless: after every boss night (every 5th night) you can build a Stairs Up room and
+add a new floor on top, move your lair up, and make heroes climb through every floor to reach you.
+Each run starts with a small set of rooms; spend souls between runs to unlock more blueprints.
 
 Built with **Godot 4.7** (GL Compatibility renderer, so it runs on older PCs and phones).
 
@@ -40,7 +41,8 @@ powershell -File tools\check.ps1 -Sim
 | `scripts/battle.gd` | One night's fight: units, turns, spells, traps, room powers and hero AI. |
 | `scripts/board.gd` | The map view: camera (fit by day, zoomed and draggable at night), drawing, and pointer input. |
 | `scripts/sprites.gd` | Placeholder art drawn with shapes. Replace any function with real textures without touching game logic. |
-| `scripts/main.gd` | The interface: header, day panels, night panels, overlays and the day/night layout switch. |
+| `scripts/main.gd` | The interface: header, day panels, overlays, the blueprint shop and the day/night layout switch. |
+| `scripts/night_hud.gd` | The fight interface drawn over the map: round and hints, camera and End turn, room powers, a short log, and the pop-up next to the unit you click. |
 | `scripts/platform.gd` | The `Platform` autoload: Steam achievements through GodotSteam when it is installed, a no-op everywhere else. |
 
 ## Shipping it

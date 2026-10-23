@@ -361,6 +361,14 @@ func handle_click(p: Vector2i) -> void:
 		return
 	select(null)
 
+## Ends one unit's turn without it doing anything more.
+func finish_unit(u: Unit) -> void:
+	if busy or over or u == null:
+		return
+	u.moved = true
+	u.acted = true
+	after_action()
+
 func after_action() -> void:
 	if check_end():
 		return

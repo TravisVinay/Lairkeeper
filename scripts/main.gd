@@ -1,8 +1,9 @@
 extends Control
 ## Builds the interface and wires the day phase, the night battle and the overlays together.
-## Day: board and building panels side by side. Night: board on top, battle panels in a row below.
+## Day: board and building panels side by side. Night: just the map, with the fight HUD on top.
 
 const BoardScript := preload("res://scripts/board.gd")
+const HudScript := preload("res://scripts/night_hud.gd")
 
 var battle: Battle = null
 var night := false
@@ -13,7 +14,8 @@ var body: BoxContainer
 var left: VBoxContainer
 var side: ScrollContainer
 var day_box: VBoxContainer
-var night_box: HFlowContainer
+var hud: Control
+var bbar: HBoxContainer
 var turn_lbl: Label
 var main_btn: Button
 var zoom_row: HBoxContainer
@@ -28,9 +30,6 @@ var trap_box: VBoxContainer
 var minion_box: VBoxContainer
 var party_box: VBoxContainer
 var boon_box: VBoxContainer
-var unit_box: VBoxContainer
-var power_panel: PanelContainer
-var power_box: VBoxContainer
 var log_labels: Array = []
 
 var start_ov: Control
@@ -207,8 +206,12 @@ func _build() -> void:
 	board.tile_hovered.connect(_on_tile_hovered)
 	board.floor_changed.connect(func(_f): render_floor_tabs())
 	frame.add_child(board)
+	hud = HudScript.new()
+	frame.add_child(hud)
+	hud.build(self, board)
+	hud.visible = false
 
-	var bbar := HBoxContainer.new()
+	bbar = HBoxContainer.new()
 	bbar.add_theme_constant_override("separation", 8)
 	left.add_child(bbar)
 	turn_lbl = title("Day 1", "#e4a648", 24)
@@ -240,11 +243,6 @@ func _build() -> void:
 	day_box.add_theme_constant_override("separation", 12)
 	day_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	side_inner.add_child(day_box)
-	night_box = HFlowContainer.new()
-	night_box.add_theme_constant_override("h_separation", 12)
-	night_box.add_theme_constant_override("v_separation", 12)
-	night_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	side_inner.add_child(night_box)
 
 	room_box = panel(day_box)
 	layout_box = panel(day_box)
@@ -255,16 +253,6 @@ func _build() -> void:
 	var dl := panel(day_box)
 	dl.add_child(h3("Chronicle"))
 	log_labels.append(_log_label(dl))
-
-	unit_box = panel(night_box, 300)
-	power_box = panel(night_box, 300)
-	power_panel = power_box.get_parent()
-	var how := panel(night_box, 300)
-	how.add_child(h3("Controls"))
-	how.add_child(lbl("Click one of your units, then a blue tile to move or a hero ringed in red to attack.\nDrag the map or use WASD to look around. Scroll to zoom.\nWalls and furniture block movement and arrows.\nHover a hero to see where it can strike next turn.\nE ends your turn. 1 and 2 cast your spells.", 14, "#a7998f"))
-	var nl := panel(night_box, 300)
-	nl.add_child(h3("Battle log"))
-	log_labels.append(_log_label(nl))
 
 	start_ov = _overlay()
 	pick_ov = _overlay()
@@ -314,19 +302,16 @@ func apply_layout() -> void:
 	for o in [start_ov, pick_ov, over_ov]:
 		o.get_meta("card").custom_minimum_size.x = minf(1080.0, vp.x - 40.0)
 		o.get_meta("center").custom_minimum_size = vp
-	if night:
-		body.vertical = true
-		side.custom_minimum_size = Vector2(0, 270 if not narrow else 300)
-		side.size_flags_vertical = Control.SIZE_FILL
-		side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	else:
-		body.vertical = narrow
-		side.custom_minimum_size = Vector2(0, 320) if narrow else Vector2(360, 0)
-		side.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		side.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
-	day_box.visible = not night
-	night_box.visible = night
-	zoom_row.visible = night
+	body.vertical = narrow
+	side.custom_minimum_size = Vector2(0, 320) if narrow else Vector2(360, 0)
+	side.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
+	# at night the map is the whole interface
+	side.visible = not night
+	bbar.visible = not night
+	tip_lbl.visible = not night
+	hud.visible = night
+	zoom_row.visible = false
 
 
 # ---------------------------------------------------------------- refresh
@@ -360,7 +345,7 @@ func render_floor_tabs() -> void:
 				if Game.floor_of(u.pos) == f:
 					heroes += 1
 		var lair := Game.floor_of_slot(Game.slot_idx("lair")) == f
-		var t := "Floor %d" % (f + 1)
+		var t := "Ground floor" if f == 0 else "Floor %d" % (f + 1)
 		if lair: t += " · lair"
 		if heroes > 0: t += " · %d hero%s" % [heroes, "es" if heroes > 1 else ""]
 		var b := Button.new()
@@ -382,8 +367,10 @@ func render_logs() -> void:
 		t += "[color=%s]%s[/color]\n" % [cols.get(l.kind, "#a7998f"), l.msg]
 	for r in log_labels:
 		r.text = t
+	hud.set_log(Game.logs)
 
 func _on_tip(msg: String, warn: bool) -> void:
+	hud.set_tip(msg, warn)
 	tip_lbl.text = msg
 	tip_lbl.add_theme_color_override("font_color", C("#ff9a8a") if warn else C("#a7998f"))
 
@@ -398,12 +385,13 @@ func render_room_panel() -> void:
 	var s: Dictionary = Game.slots[i]
 	if s.state == "rock":
 		room_box.add_child(h3("Selected"))
-		room_box.add_child(title("Solid rock"))
+		var ground := Game.floor_of_slot(i) == 0
+		room_box.add_child(title("Solid rock" if ground else "Open air"))
 		if Game.diggable(i):
-			room_box.add_child(lbl("Dig out a new 5x5 chamber. Each one you dig costs a little more.", 15, "#a7998f"))
-			room_box.add_child(opt("Dig chamber", "1h · %dg" % Game.dig_cost(), "", func(): Game.dig(i), Game.hours < 1 or Game.gold < Game.dig_cost()))
+			room_box.add_child(lbl(("Dig out" if ground else "Build out") + " a new 5x5 chamber. Each one costs a little more.", 15, "#a7998f"))
+			room_box.add_child(opt("Dig chamber" if ground else "Build chamber", "1h · %dg" % Game.dig_cost(), "", func(): Game.dig(i), Game.hours < 1 or Game.gold < Game.dig_cost()))
 		else:
-			room_box.add_child(lbl("Dig out a chamber next to it first.", 15, "#a7998f"))
+			room_box.add_child(lbl("Open up a chamber next to it first.", 15, "#a7998f"))
 	elif s.state == "dug":
 		room_box.add_child(h3("Selected"))
 		room_box.add_child(title("Empty chamber"))
@@ -417,13 +405,13 @@ func render_room_panel() -> void:
 			if t != "stairs" and Game.can_build(t, i):
 				(sig if Data.ROOMS[t].has("owner") else com).append(t)
 		if Game.floor_type_count("stairs", Game.floor_of_slot(i)) == 0:
-			room_box.add_child(h3("Go deeper"))
+			room_box.add_child(h3("Build higher"))
 			var why := Game.stairs_block(i)
 			if why == "":
 				room_box.add_child(_room_opt(i, "stairs"))
 			else:
 				var c: int = Data.ROOMS.stairs.cost[0]
-				room_box.add_child(opt("Stairs Down", "1h · %dg" % c, why, func(): pass, true))
+				room_box.add_child(opt("Stairs Up", "1h · %dg" % c, why, func(): pass, true))
 		if sig.size() > 0:
 			room_box.add_child(lbl(("%s's rooms" % Game.M.name).to_upper(), 12, Game.M.col))
 			for t in sig:
@@ -432,6 +420,9 @@ func render_room_panel() -> void:
 			room_box.add_child(h3("Common rooms"))
 			for t in com:
 				room_box.add_child(_room_opt(i, t))
+		var locked := Game.locked_rooms_for(Game.mk).size()
+		if locked > 0:
+			room_box.add_child(lbl("%d more room%s can be unlocked with souls between runs." % [locked, "s" if locked > 1 else ""], 13, "#a7998f"))
 	else:
 		var R: Dictionary = Data.ROOMS[s.type]
 		room_box.add_child(h3("Selected" + (" · level %d" % s.lvl if R.cost.size() > 1 else "")))
@@ -524,64 +515,8 @@ func render_party() -> void:
 # ---------------------------------------------------------------- night panels
 
 func render_night() -> void:
-	if battle == null:
-		return
-	turn_lbl.text = "The heroes advance" if battle.busy and battle.sel == null else "Night %d · round %d" % [Game.day, battle.turn]
-	main_btn.text = "End turn"
-	main_btn.disabled = battle.busy or battle.over
-	if _hover_hero != null and _hover_hero.hp > 0:
-		_render_hero(_hover_hero)
-	else:
-		_render_unit()
-	clear(power_box)
-	var si := Game.slot_idx("collapse")
-	var stairs := Game.lvl("stairs") >= 3 and Game.links.size() > 0
-	power_panel.visible = si >= 0 or stairs
-	if power_panel.visible:
-		power_box.add_child(h3("Room powers"))
-	if si >= 0:
-		var l := Game.lvl("collapse")
-		power_box.add_child(opt("Collapse the Hall", "used" if battle.used.has("collapse") else "once",
-			"%d damage to everyone standing in the Collapsing Hall, your units included." % (8 + (l - 1) * 4),
-			func(): battle.collapse(), battle.used.has("collapse") or battle.busy))
-	if stairs:
-		power_box.add_child(opt("Bring down the stairs", "used" if battle.used.has("stairs") else "once",
-			"Nobody can move between floors for 2 hero turns. Heroes standing on a staircase take 8 damage.",
-			func(): battle.shut_stairs(), battle.used.has("stairs") or battle.busy))
-
-func _stats_row(hp: int, mx: int, mv: int, hit: int, rng: int) -> Label:
-	return lbl("HP %d/%d    Move %d    Hit %d    Range %d" % [hp, mx, mv, hit, rng], 15, "#ede3cd")
-
-func _render_unit() -> void:
-	clear(unit_box)
-	var u := battle.sel
-	if u == null:
-		unit_box.add_child(h3("Selected"))
-		unit_box.add_child(title("No unit"))
-		unit_box.add_child(lbl("Click one of your units to command it.", 14, "#a7998f"))
-		return
-	unit_box.add_child(h3(("You" if u.kind == "monster" else ("Your thrall" if u.thrall else "Your minion")) + (" · done" if u.acted and u.moved else "")))
-	unit_box.add_child(title(u.uname, Game.M.col if u.kind == "monster" else "#ede3cd", 22))
-	unit_box.add_child(_stats_row(u.hp, u.max_hp, battle.move_of(u), battle.atk_of(u), u.rng))
-	if u.kind == "monster":
-		for sp in Game.M.specials:
-			var cd: int = u.cds.get(sp.id, 0)
-			var state := ("%d turn%s" % [cd, "s" if cd > 1 else ""]) if cd > 0 else ("acted" if u.acted else "ready")
-			unit_box.add_child(opt(sp.name, state, sp.desc + ("" if sp.get("free", false) else " Uses your action."),
-				func(): battle.arm_spell(sp.id), not battle.can_cast(sp), battle.mode == sp.id))
-
-func _render_hero(h) -> void:
-	clear(unit_box)
-	var cond := []
-	if h.stun > 0: cond.append("mesmerized")
-	if h.conf > 0: cond.append("confused")
-	if h.root > 0: cond.append("snared")
-	if h.slow > 0: cond.append("slowed")
-	if h.flee: cond.append("fleeing with gold")
-	unit_box.add_child(h3("Hero" + (" · " + ", ".join(cond) if cond.size() > 0 else "")))
-	unit_box.add_child(title("%s the %s" % [h.uname, h.d.name], "#ede3cd", 22))
-	unit_box.add_child(_stats_row(h.hp, h.max_hp, battle.move_of(h), h.atk, h.rng))
-	unit_box.add_child(lbl(h.d.get("note", "Hunts down the nearest monster.") + " Red tiles show where it can strike next turn.", 14, "#a7998f"))
+	if battle:
+		hud.render()
 
 
 # ---------------------------------------------------------------- input
@@ -589,13 +524,32 @@ func _render_hero(h) -> void:
 func _on_tile_clicked(p: Vector2i) -> void:
 	if start_ov.visible or pick_ov.visible or over_ov.visible:
 		return
-	if battle:
-		battle.handle_click(p)
-	else:
+	if battle == null:
 		Game.day_click(p)
+		return
+	if battle.busy or battle.over:
+		return
+	if battle.mode != "":
+		battle.handle_click(p)
+		return
+	var u = battle.unit_at(p) if Game.in_b(p) else null
+	if u != null and u.side == "h":
+		var s = battle.sel
+		if s != null and not s.acted and Game.in_range(s.pos, u.pos, s.rng):
+			hud.inspect = null
+			battle.handle_click(p)
+		else:
+			# out of reach: open the hero's pop-up instead
+			hud.inspect = u
+			battle.threat = battle.threat_of(u)
+			render_night()
+		return
+	hud.inspect = null
+	battle.threat = {}
+	battle.handle_click(p)
 
 func _on_tile_hovered(p: Vector2i) -> void:
-	if battle == null:
+	if battle == null or hud.inspect != null:
 		return
 	var u = battle.unit_at(p) if Game.in_b(p) else null
 	var h = u if u != null and u.side == "h" else null
@@ -603,7 +557,6 @@ func _on_tile_hovered(p: Vector2i) -> void:
 		return
 	_hover_hero = h
 	battle.threat = battle.threat_of(h) if h != null else {}
-	render_night()
 
 func _on_main_btn() -> void:
 	if battle == null:
@@ -629,7 +582,10 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_A, KEY_LEFT: board.pan(Vector2(-2, 0))
 		KEY_D, KEY_RIGHT: board.pan(Vector2(2, 0))
 		KEY_E: battle.enemy_turn()
-		KEY_ESCAPE: battle.select(null)
+		KEY_ESCAPE:
+			hud.inspect = null
+			battle.threat = {}
+			battle.select(null)
 		KEY_1, KEY_2:
 			var idx := 0 if e.keycode == KEY_1 else 1
 			if idx < Game.M.specials.size():
@@ -645,6 +601,8 @@ func start_night() -> void:
 	battle.finished.connect(_on_finished)
 	battle.focus.connect(board.follow)
 	board.battle = battle
+	hud.battle = battle
+	hud.inspect = null
 	night = true
 	_hover_hero = null
 	subtitle.text = "Night %d. The heroes are inside." % Game.day
@@ -657,6 +615,8 @@ func start_night() -> void:
 
 func end_night() -> void:
 	board.battle = null
+	hud.battle = null
+	hud.inspect = null
 	if battle:
 		battle.queue_free()
 	battle = null
@@ -746,6 +706,7 @@ func show_start() -> void:
 		b.add_theme_color_override("font_color", C(M.col))
 		b.pressed.connect(func(): _choose(k))
 		flow.add_child(b)
+	_blueprints(v)
 	var meta := HBoxContainer.new()
 	v.add_child(meta)
 	var ml := lbl("Souls banked: %d · Most nights survived: %d" % [Game.meta.souls, Game.meta.best], 15, "#c9a7ff", false)
@@ -760,6 +721,40 @@ func show_start() -> void:
 	hb.pressed.connect(_buy_hoard.bind(price))
 	meta.add_child(hb)
 	start_ov.visible = true
+
+## The blueprint shop: rooms bought with souls stay unlocked for every future run.
+func _blueprints(v: VBoxContainer) -> void:
+	var total := 0
+	var open := 0
+	for t in Data.ROOMS:
+		if not Data.ROOMS[t].get("fixed", false):
+			total += 1
+			if Game.is_unlocked(t):
+				open += 1
+	v.add_child(h3("Blueprints · %d of %d rooms unlocked" % [open, total]))
+	var locked := []
+	for t in Data.ROOMS:
+		if not Game.is_unlocked(t):
+			locked.append(t)
+	if locked.is_empty():
+		v.add_child(lbl("Every room is unlocked.", 14, "#a7998f"))
+		return
+	v.add_child(lbl("Every run starts with the basics and one signature room. Spend souls here to add more rooms to every future run.", 14, "#a7998f"))
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
+	v.add_child(flow)
+	locked.sort_custom(func(a, c): return Data.ROOMS[a].unlock < Data.ROOMS[c].unlock)
+	for t in locked:
+		var R: Dictionary = Data.ROOMS[t]
+		var who: String = (" · " + Data.MONSTERS[R.owner].name) if R.has("owner") else ""
+		var b := opt(R.name + who, "%d souls" % R.unlock, Data.room_eff(t, 1), _unlock.bind(t), Game.meta.souls < R.unlock)
+		b.custom_minimum_size = Vector2(250, 0)
+		flow.add_child(b)
+
+func _unlock(t: String) -> void:
+	if Game.unlock_room(t):
+		show_start()
 
 func _rise_again() -> void:
 	over_ov.visible = false

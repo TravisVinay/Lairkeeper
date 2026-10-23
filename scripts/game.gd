@@ -15,8 +15,8 @@ const BOSS_EVERY := 5
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 const META_PATH := "user://meta.json"
 
-var meta := {"souls": 0, "hoard": 0, "best": 0}
-## Skips animation waits. The headless tests turn this on.
+var meta := {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
+## Skips animation waits and saving. The headless tests turn this on.
 var fast := false
 
 var mk := ""
@@ -37,6 +37,7 @@ var minions := []    # {mid, kind, home, post, free}
 var obj := {}        # Vector2i -> {kind, block}
 var entrance := Vector2i(12, 0)
 ## Floors are stacked in one coordinate space: floor f covers tile rows f*BH to f*BH+BH-1.
+## Floor 0 is the ground floor with the surface entrance; higher indexes are higher up the tower.
 var floors := 1
 var bosses := 0              # boss nights survived; each one allows one more floor
 var links := {}              # Vector2i -> Vector2i, the stairs between floors
@@ -67,10 +68,12 @@ func load_meta() -> void:
 	var d = JSON.parse_string(f.get_as_text())
 	if d is Dictionary:
 		for k in d:
-			meta[k] = int(d[k])
+			meta[k] = d[k] if d[k] is Array else int(d[k])
 
 
 func save_meta() -> void:
+	if fast:
+		return   # headless tests must never touch the player's save
 	var f := FileAccess.open(META_PATH, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(meta))
@@ -290,7 +293,7 @@ func rebuild_objs() -> void:
 		var o := slot_xy(si) * RS
 		for e in objs:
 			obj[o + Vector2i(e[0], e[1])] = {"kind": e[2], "block": e.size() > 3 and e[3] == 1}
-	# stairs: the center of each Stairs room links to the center of the same slot one floor down
+	# stairs: the center of each Stairs Up room links to the center of the same slot one floor up
 	links = {}
 	for si in slots.size():
 		if slots[si].get("type", "") == "stairs" and si + FLOOR_SLOTS < slots.size():
@@ -298,7 +301,7 @@ func rebuild_objs() -> void:
 			var bottom := top + Vector2i(0, BH)
 			links[top] = bottom
 			links[bottom] = top
-			obj[bottom] = {"kind": "stairs_up", "block": false}
+			obj[bottom] = {"kind": "stairs_down", "block": false}
 	for k in traps.keys():
 		if not is_open(k):
 			gold += trap_cost(traps[k]) / 2
@@ -354,10 +357,32 @@ func dig(si: int) -> void:
 	add_log("Your servants dig out a new chamber.")
 	_layout_changed()
 
+## Starter rooms are always open; the rest must be unlocked with souls between runs.
+func is_unlocked(t: String) -> bool:
+	return not Data.ROOMS[t].has("unlock") or t in meta.rooms
+
+func unlock_room(t: String) -> bool:
+	var c: int = Data.ROOMS[t].get("unlock", 0)
+	if is_unlocked(t) or meta.souls < c:
+		return false
+	meta.souls -= c
+	meta.rooms.append(t)
+	save_meta()
+	return true
+
+## Rooms this monster could still unlock.
+func locked_rooms_for(key: String) -> Array:
+	var o := []
+	for t in Data.ROOMS:
+		var R: Dictionary = Data.ROOMS[t]
+		if not is_unlocked(t) and (not R.has("owner") or R.owner == key):
+			o.append(t)
+	return o
+
 ## Each room type can be built once per floor.
 func can_build(t: String, si: int) -> bool:
 	var R: Dictionary = Data.ROOMS[t]
-	if R.get("fixed", false) or (R.has("owner") and R.owner != mk):
+	if R.get("fixed", false) or (R.has("owner") and R.owner != mk) or not is_unlocked(t):
 		return false
 	if floor_type_count(t, floor_of_slot(si)) > 0:
 		return false
@@ -367,9 +392,9 @@ func can_build(t: String, si: int) -> bool:
 func stairs_block(si: int) -> String:
 	var f := floor_of_slot(si)
 	if f < floors - 1:
-		return "This floor already leads down."
+		return "This floor already has stairs up."
 	if floors >= 1 + bosses:
-		return "The rock is too hard. Survive a boss night (night %d) to dig deeper." % ((bosses + 1) * BOSS_EVERY)
+		return "Your lair can't carry another floor yet. Survive a boss night (night %d) to build higher." % ((bosses + 1) * BOSS_EVERY)
 	return ""
 
 func build(si: int, t: String) -> void:
@@ -382,7 +407,7 @@ func build(si: int, t: String) -> void:
 	if t == "stairs":
 		_add_floor()
 		slots[si + FLOOR_SLOTS] = {"state": "dug"}
-		add_log("Your servants break through to floor %d." % floors, "info")
+		add_log("Your servants raise floor %d above the lair." % floors, "info")
 	else:
 		add_log("You build a %s." % Data.ROOMS[t].name)
 	_layout_changed()
@@ -404,7 +429,7 @@ func demolish(si: int) -> void:
 	if Data.ROOMS[s.type].get("fixed", false):
 		return
 	if s.type == "stairs":
-		tip("The floor below hangs from these stairs. They cannot come down.", true)
+		tip("The floor above stands on these stairs. They cannot come down.", true)
 		return
 	for m in minions:
 		if m.home == si and not m.free:

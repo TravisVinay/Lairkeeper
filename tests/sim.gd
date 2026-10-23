@@ -10,8 +10,11 @@ var _won := false
 
 
 func _ready() -> void:
+	Game.fast = true                       # no animation waits, and never write the real save
+	Game.meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
+	_unlock_test()
+	Game.meta.rooms = Data.ROOMS.keys()   # the scripted runs may use every room
 	await _ui_smoke()
-	Game.fast = true
 	await _floor_test()
 	for k in Data.MONSTERS:
 		for i in 2:
@@ -36,7 +39,13 @@ func _ui_smoke() -> void:
 	await main.start_night()
 	for i in 5:
 		await get_tree().process_frame
-	print("UI smoke: board %s, units %d" % [main.board.size, main.battle.units.size()])
+	var pop_self: bool = main.hud.popup.visible
+	var hero = main.battle.alive("h")[0]
+	main._on_tile_clicked(hero.pos)
+	await get_tree().process_frame
+	var pop_hero: bool = main.hud.popup.visible and main.hud.inspect == hero
+	print("UI smoke: board %s, units %d, side panel hidden %s, pop-up on monster %s, pop-up on hero %s" % [
+		main.board.size, main.battle.units.size(), not main.side.visible, pop_self, pop_hero])
 	main.queue_free()
 	await get_tree().process_frame
 
@@ -80,6 +89,19 @@ func _floor_test() -> void:
 	print("FLOORS: %s (heroes reached floor %d in %d rounds)" % ["ok" if errors.is_empty() else "FAIL " + "; ".join(errors), deepest + 1, rounds])
 	b.queue_free()
 
+
+func _unlock_test() -> void:
+	Game.new_run("lich")
+	var errors := []
+	if Game.can_build("armory", 7): errors.append("armory buildable while locked")
+	if not Game.can_build("treasury", 7): errors.append("treasury (starter) not buildable")
+	if not Game.can_build("library", 7): errors.append("lich starter room not buildable")
+	if Game.can_build("manawell", 7): errors.append("mana well buildable while locked")
+	if Game.unlock_room("armory"): errors.append("unlocked a room with no souls")
+	Game.meta.souls = 100
+	if not Game.unlock_room("armory") or not Game.can_build("armory", 7): errors.append("could not unlock and build the armory")
+	if Game.meta.souls != 100 - Data.ROOMS.armory.unlock: errors.append("unlock did not charge souls")
+	print("UNLOCKS: %s" % ("ok" if errors.is_empty() else "FAIL " + "; ".join(errors)))
 
 func _check_layouts() -> void:
 	for t in Data.ROOMS:
