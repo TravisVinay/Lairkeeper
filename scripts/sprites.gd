@@ -294,6 +294,18 @@ static func furniture(c: CanvasItem, k: String, now: float, seed: int, mcol: Col
 					var a := TAU * j / 20
 					pts.append(Vector2(32, 38) + Vector2(cos(a) * (18 - i * 5), sin(a) * (10 - i * 3)))
 				c.draw_polyline(pts, C("#b08a5a"), 3, true)
+		"stairs_down":
+			rect(c, 4, 4, 56, 56, C("#0b080d"))
+			for i in 5:
+				var w := 52.0 - i * 9
+				rect(c, 32 - w / 2, 8 + i * 10, w, 7, Color.from_hsv(0.09, 0.25, 0.42 - i * 0.07))
+			glow(c, Vector2(32, 50), 18, C("#e4a648", 0.25))
+		"stairs_up":
+			rect(c, 6, 6, 52, 52, C("#2a2230"))
+			for i in 5:
+				var w := 16.0 + i * 9
+				rect(c, 32 - w / 2, 10 + i * 9, w, 6, Color.from_hsv(0.09, 0.2, 0.25 + i * 0.06))
+			poly(c, [Vector2(32, 2), Vector2(24, 10), Vector2(40, 10)], C("#e4a648", 0.8))
 		"stairs":
 			for i in 4:
 				rect(c, 6 + i * 3, 4 + i * 9, 52 - i * 6, 8, Color.from_hsv(0.08, 0.3, 0.3 - i * 0.05))

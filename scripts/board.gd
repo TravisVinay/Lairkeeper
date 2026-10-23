@@ -4,6 +4,7 @@ extends Control
 
 signal tile_clicked(p: Vector2i)
 signal tile_hovered(p: Vector2i)
+signal floor_changed(f: int)
 
 const T := 64.0
 
@@ -13,7 +14,7 @@ var cam_z := 30.0                # screen pixels per tile
 var tgt := cam
 var tgt_z := cam_z
 var hover := Vector2i(-99, -99)
-var shade := []
+var shown_floor := 0             # the floor being shown
 var now := 0.0
 var font: Font
 var _press = null
@@ -25,11 +26,6 @@ func _ready() -> void:
 	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	font = ThemeDB.fallback_font
-	for y in Game.BH:
-		var row := []
-		for x in Game.BW:
-			row.append(randf())
-		shade.append(row)
 	resized.connect(_on_resized)
 	mouse_exited.connect(_on_mouse_exited)
 
@@ -53,9 +49,30 @@ func fit_z() -> float:
 func night_z() -> float:
 	return maxf(fit_z() * 1.5, minf(size.x / 15.0, size.y / 11.0))
 
+## Stable per-tile noise for floor shading, so every floor looks different without stored arrays.
+func shade(x: int, y: int) -> float:
+	return fposmod(sin(x * 12.9898 + y * 78.233) * 43758.5453, 1.0)
+
+func top() -> float:
+	return float(shown_floor * Game.BH)
+
+func show_floor(f: int, snap := true) -> void:
+	f = clampi(f, 0, Game.floors - 1)
+	var changed := f != shown_floor
+	shown_floor = f
+	if battle == null or zoomed_out():
+		fit(snap)
+	else:
+		tgt.y += (f - Game.floor_of(Vector2i(cam))) * Game.BH
+		clamp_cam()
+		if snap:
+			cam = tgt
+	if changed:
+		floor_changed.emit(f)
+
 func fit(snap := false) -> void:
 	tgt_z = fit_z()
-	tgt = Vector2(Game.BW, Game.BH) / 2.0
+	tgt = Vector2(Game.BW / 2.0, top() + Game.BH / 2.0)
 	if snap:
 		cam = tgt
 		cam_z = tgt_z
@@ -77,8 +94,15 @@ func pan(d: Vector2) -> void:
 	tgt += d
 	clamp_cam()
 
-## Recenters on a tile only when it is near the edge of the view.
+## Recenters on a tile only when it is near the edge of the view, switching floors if needed.
 func follow(p: Vector2i) -> void:
+	if Game.floor_of(p) != shown_floor:
+		shown_floor = Game.floor_of(p)
+		tgt = Vector2(p) + Vector2(0.5, 0.5)
+		clamp_cam()
+		cam = tgt
+		floor_changed.emit(shown_floor)
+		return
 	var hw := size.x / 2.0 / tgt_z
 	var hh := size.y / 2.0 / tgt_z
 	var c := Vector2(p) + Vector2(0.5, 0.5)
@@ -90,11 +114,16 @@ func clamp_cam() -> void:
 	var hw := size.x / 2.0 / tgt_z
 	var hh := size.y / 2.0 / tgt_z
 	tgt.x = Game.BW / 2.0 if Game.BW <= hw * 2.0 else clampf(tgt.x, hw, Game.BW - hw)
-	tgt.y = Game.BH / 2.0 if Game.BH <= hh * 2.0 else clampf(tgt.y, hh, Game.BH - hh)
+	tgt.y = top() + Game.BH / 2.0 if Game.BH <= hh * 2.0 else clampf(tgt.y, top() + hh, top() + Game.BH - hh)
 
+## The tile under a screen point, or (-99, -99) when the point is off the shown floor.
 func screen_to_tile(sp: Vector2) -> Vector2i:
 	var w := (sp - size / 2.0) / cam_z + cam
-	return Vector2i(floori(w.x), floori(w.y))
+	var t := Vector2i(floori(w.x), floori(w.y))
+	return t if Game.floor_of(t) == shown_floor and w.y >= 0.0 else Vector2i(-99, -99)
+
+func here(p: Vector2i) -> bool:
+	return p.y >= shown_floor * Game.BH and p.y < (shown_floor + 1) * Game.BH
 
 
 # ---------------------------------------------------------------- input
@@ -183,18 +212,20 @@ func _draw() -> void:
 	var mcol := Data.col(Game.M.col)
 	draw_set_transform_matrix(xf)
 
+	var y0 := shown_floor * Game.BH
+	var s0 := shown_floor * Game.FLOOR_SLOTS
 	# rock and floor
-	for y in Game.BH:
+	for y in range(y0, y0 + Game.BH):
 		for x in Game.BW:
 			var p := Vector2i(x, y)
-			var v: float = shade[y][x]
+			var v := shade(x, y)
 			var r := Rect2(x * T, y * T, T + 1, T + 1)
 			if not Game.is_floor(p):
 				draw_rect(r, Color(0.06 + v * 0.03, 0.05 + v * 0.025, 0.07 + v * 0.03))
 			else:
 				draw_rect(r, Color(0.15 + v * 0.04, 0.13 + v * 0.035, 0.17 + v * 0.04))
 				draw_rect(Rect2(x * T, y * T, T, T), Color(0, 0, 0, 0.35), false, 1.5)
-	for si in Game.slots.size():
+	for si in range(s0, s0 + Game.FLOOR_SLOTS):
 		var sl: Dictionary = Game.slots[si]
 		if sl.state != "built":
 			continue
@@ -214,14 +245,14 @@ func _draw() -> void:
 
 	# flat furniture
 	for k in Game.obj:
-		if not Game.obj[k].block:
+		if here(k) and not Game.obj[k].block:
 			draw_set_transform_matrix(xf * Transform2D(0.0, Vector2(k) * T))
 			Sprites.furniture(self, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
 	draw_set_transform_matrix(xf)
 
 	# walls
 	var segs := PackedVector2Array()
-	for y in Game.BH:
+	for y in range(y0, y0 + Game.BH):
 		for x in Game.BW:
 			var p := Vector2i(x, y)
 			if not Game.is_floor(p):
@@ -241,7 +272,8 @@ func _draw() -> void:
 					segs.append_array([a, a + Vector2(T, 0)])
 	if segs.size() > 0:
 		draw_multiline(segs, Data.col("#09070b"), 9.0)
-	_draw_gate(xf)
+	if shown_floor == 0:
+		_draw_gate(xf)
 
 	if battle == null:
 		_draw_day_overlay()
@@ -249,17 +281,19 @@ func _draw() -> void:
 		_draw_night_overlay()
 
 	for k in Game.traps:
+		if not here(k):
+			continue
 		draw_set_transform_matrix(xf * Transform2D(0.0, Vector2(k) * T))
 		Sprites.trap(self, Game.traps[k], now)
 	for k in Game.obj:
-		if Game.obj[k].block:
+		if here(k) and Game.obj[k].block:
 			draw_set_transform_matrix(xf * Transform2D(0.0, Vector2(k) * T))
 			Sprites.furniture(self, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
 	draw_set_transform_matrix(xf)
 
 	# room labels
 	var fs := int(maxf(18.0, 11.0 * T / cam_z))
-	for si in Game.slots.size():
+	for si in range(s0, s0 + Game.FLOOR_SLOTS):
 		var sl: Dictionary = Game.slots[si]
 		if sl.state == "rock":
 			continue
@@ -274,7 +308,7 @@ func _draw() -> void:
 
 	if battle:
 		for k in battle.corpses:
-			if battle.unit_at(k) == null:
+			if here(k) and battle.unit_at(k) == null:
 				var a := Vector2(k) * T
 				draw_line(a + Vector2(18, 40), a + Vector2(46, 30), Data.col("#e8dcc0", 0.5), 3.0)
 				draw_line(a + Vector2(22, 28), a + Vector2(42, 44), Data.col("#e8dcc0", 0.5), 3.0)
@@ -282,12 +316,14 @@ func _draw() -> void:
 			for h in battle.targets_for(battle.sel):
 				draw_arc((h.draw_pos + Vector2(0.5, 0.5)) * T, T * 0.46, 0, TAU, 28, Data.col("#ff5d6a"), 3.0, true)
 		for u in battle.units:
-			if u.hp > 0:
+			if u.hp > 0 and here(u.pos):
 				_draw_unit(xf, u.kind, u.d, u.draw_pos + u.lunge, u.side, u.hp, u.max_hp, u.id, u.flash > 0.0,
 					battle.sel == u, u.acted and u.moved and u.side == "p" and not battle.busy, u.slow > 0, u.root > 0,
 					u.thrall or u.conf > 0, u.flee, u.stun > 0, u.thrall, true)
 		draw_set_transform_matrix(xf)
 		for f in battle.fx:
+			if not here(f.a):
+				continue
 			var a: float = clampf(f.t / f.max, 0.0, 1.0)
 			var c: Color = f.col
 			c.a = a
@@ -307,8 +343,11 @@ func _draw() -> void:
 			draw_string(font, at, t.s, HORIZONTAL_ALIGNMENT_CENTER, 220, 22, c)
 	else:
 		var ms := Game.monster_start()
-		_draw_unit(xf, "monster", Game.M, Vector2(ms), "p", Game.mhp, Game.mmax, 0, false, false, false, false, false, false, false, false, false, false)
+		if here(ms):
+			_draw_unit(xf, "monster", Game.M, Vector2(ms), "p", Game.mhp, Game.mmax, 0, false, false, false, false, false, false, false, false, false, false)
 		for m in Game.minions:
+			if not here(m.post):
+				continue
 			_draw_unit(xf, m.kind, Data.UNITS[m.kind], Vector2(m.post), "p", 1, 1, m.mid, false, Game.sel_minion == m, false,
 				false, false, false, false, false, false, false)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
@@ -338,12 +377,12 @@ func _draw_gate(xf: Transform2D) -> void:
 func _draw_day_overlay() -> void:
 	if Game.ent_mode:
 		var a := 0.25 + sin(now * 4.0) * 0.1
-		for y in Game.BH:
+		for y in range(shown_floor * Game.BH, (shown_floor + 1) * Game.BH):
 			for x in Game.BW:
 				var p := Vector2i(x, y)
 				if Game.on_border(p) and Game.is_open(p) and p != Game.entrance:
 					draw_rect(Rect2(x * T + 4, y * T + 4, T - 8, T - 8), Data.col("#e4a648", a))
-	if Game.sel >= 0 and not Game.ent_mode and Game.trap_mode == "":
+	if Game.sel >= 0 and Game.floor_of_slot(Game.sel) == shown_floor and not Game.ent_mode and Game.trap_mode == "":
 		var o := Vector2(Game.slot_xy(Game.sel) * Game.RS) * T
 		draw_rect(Rect2(o + Vector2(4, 4), Vector2(Game.RS, Game.RS) * T - Vector2(8, 8)), Data.col("#e4a648"), false, 4.0)
 	if not Game.in_b(hover):

@@ -9,7 +9,9 @@ const SW := 5
 const SH := 4
 const RS := 5
 const BW := SW * RS
-const BH := SH * RS
+const BH := SH * RS          # tile rows per floor
+const FLOOR_SLOTS := SW * SH
+const BOSS_EVERY := 5
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 const META_PATH := "user://meta.json"
 
@@ -34,6 +36,11 @@ var traps := {}      # Vector2i -> trap type
 var minions := []    # {mid, kind, home, post, free}
 var obj := {}        # Vector2i -> {kind, block}
 var entrance := Vector2i(12, 0)
+## Floors are stacked in one coordinate space: floor f covers tile rows f*BH to f*BH+BH-1.
+var floors := 1
+var bosses := 0              # boss nights survived; each one allows one more floor
+var links := {}              # Vector2i -> Vector2i, the stairs between floors
+var stairs_shut := 0         # turns left with every staircase collapsed
 var party := []
 var sel := -1
 var sel_minion = null
@@ -85,8 +92,10 @@ func new_run(key: String) -> void:
 	taken = []
 	b = {"atk": 0, "spell": 0, "move": 0, "minion": 0, "feast": 0, "cd": 0, "greed": 0.0, "trap": 0, "hours": 0}
 	slots = []
-	for i in SW * SH:
-		slots.append({"state": "rock"})
+	floors = 0
+	bosses = 0
+	stairs_shut = 0
+	_add_floor()
 	traps = {}
 	minions = []
 	entrance = Vector2i(2 * RS + 2, 0)
@@ -119,17 +128,40 @@ func make_party(d: int) -> Array:
 	return list
 
 
+## Highest level of a room type anywhere in the dungeon. Copies on other floors do not stack.
 func lvl(t: String) -> int:
+	var best := 0
 	for s in slots:
 		if s.get("type", "") == t:
-			return s.lvl
-	return 0
+			best = maxi(best, s.lvl)
+	return best
+
+func rows() -> int:
+	return BH * floors
+
+func floor_of(p: Vector2i) -> int:
+	return p.y / BH
+
+func floor_of_slot(si: int) -> int:
+	return si / FLOOR_SLOTS
+
+func _add_floor() -> void:
+	for i in FLOOR_SLOTS:
+		slots.append({"state": "rock"})
+	floors += 1
+
+func floor_type_count(t: String, f: int) -> int:
+	var n := 0
+	for i in range(f * FLOOR_SLOTS, (f + 1) * FLOOR_SLOTS):
+		if slots[i].get("type", "") == t:
+			n += 1
+	return n
 
 
 # ---------------------------------------------------------------- geometry
 
 func in_b(p: Vector2i) -> bool:
-	return p.x >= 0 and p.y >= 0 and p.x < BW and p.y < BH
+	return p.x >= 0 and p.y >= 0 and p.x < BW and p.y < BH * floors
 
 func slot_of(p: Vector2i) -> int:
 	return (p.y / RS) * SW + (p.x / RS)
@@ -163,8 +195,9 @@ func slot_idx(t: String) -> int:
 			return i
 	return -1
 
+## The outer edge of floor 1, the only place the surface entrance can go.
 func on_border(p: Vector2i) -> bool:
-	return p.x == 0 or p.y == 0 or p.x == BW - 1 or p.y == BH - 1
+	return p.y < BH and (p.x == 0 or p.y == 0 or p.x == BW - 1 or p.y == BH - 1)
 
 func man(a: Vector2i, c: Vector2i) -> int:
 	return absi(a.x - c.x) + absi(a.y - c.y)
@@ -174,6 +207,8 @@ func wall_between(a: Vector2i, c: Vector2i) -> bool:
 		return true
 	if slot_of(a) == slot_of(c):
 		return false
+	if floor_of(a) != floor_of(c):
+		return true
 	# doorways are the middle three tiles of each shared wall
 	var l: int = (a.y % RS) if a.x != c.x else (a.x % RS)
 	return l < 1 or l > 3
@@ -214,21 +249,35 @@ func field(srcs: Array) -> Dictionary:
 	while i < q.size():
 		var c: Vector2i = q[i]
 		i += 1
-		for d in DIRS:
-			var n: Vector2i = c + d
-			if F.has(n) or not can_step(c, n):
+		for n in steps(c):
+			if F.has(n):
 				continue
 			F[n] = F[c] + 1
 			q.append(n)
 	return F
 
+## Tiles a unit standing on p can walk to in one step, including taking the stairs.
+func steps(p: Vector2i) -> Array:
+	var o := []
+	for d in DIRS:
+		var n: Vector2i = p + d
+		if can_step(p, n):
+			o.append(n)
+	if stairs_shut <= 0 and links.has(p) and is_open(links[p]):
+		o.append(links[p])
+	return o
+
+func is_link(a: Vector2i, c: Vector2i) -> bool:
+	return links.get(a, Vector2i(-1, -1)) == c
+
 func slot_neighbors(si: int) -> Array:
 	var s := slot_xy(si)
+	var row := s.y % SH
 	var o := []
 	if s.x > 0: o.append(si - 1)
 	if s.x < SW - 1: o.append(si + 1)
-	if s.y > 0: o.append(si - SW)
-	if s.y < SH - 1: o.append(si + SW)
+	if row > 0: o.append(si - SW)
+	if row < SH - 1: o.append(si + SW)
 	return o
 
 func rebuild_objs() -> void:
@@ -241,6 +290,15 @@ func rebuild_objs() -> void:
 		var o := slot_xy(si) * RS
 		for e in objs:
 			obj[o + Vector2i(e[0], e[1])] = {"kind": e[2], "block": e.size() > 3 and e[3] == 1}
+	# stairs: the center of each Stairs room links to the center of the same slot one floor down
+	links = {}
+	for si in slots.size():
+		if slots[si].get("type", "") == "stairs" and si + FLOOR_SLOTS < slots.size():
+			var top := slot_xy(si) * RS + Vector2i(2, 2)
+			var bottom := top + Vector2i(0, BH)
+			links[top] = bottom
+			links[bottom] = top
+			obj[bottom] = {"kind": "stairs_up", "block": false}
 	for k in traps.keys():
 		if not is_open(k):
 			gold += trap_cost(traps[k]) / 2
@@ -296,18 +354,37 @@ func dig(si: int) -> void:
 	add_log("Your servants dig out a new chamber.")
 	_layout_changed()
 
-func can_build(t: String) -> bool:
+## Each room type can be built once per floor.
+func can_build(t: String, si: int) -> bool:
 	var R: Dictionary = Data.ROOMS[t]
-	return not R.get("fixed", false) and lvl(t) == 0 and (not R.has("owner") or R.owner == mk)
+	if R.get("fixed", false) or (R.has("owner") and R.owner != mk):
+		return false
+	if floor_type_count(t, floor_of_slot(si)) > 0:
+		return false
+	return t != "stairs" or stairs_block(si) == ""
+
+## Why a Stairs room cannot go in this chamber, or "" if it can.
+func stairs_block(si: int) -> String:
+	var f := floor_of_slot(si)
+	if f < floors - 1:
+		return "This floor already leads down."
+	if floors >= 1 + bosses:
+		return "The rock is too hard. Survive a boss night (night %d) to dig deeper." % ((bosses + 1) * BOSS_EVERY)
+	return ""
 
 func build(si: int, t: String) -> void:
-	if slots[si].state != "dug" or not can_build(t) or not spend(Data.ROOMS[t].cost[0]):
+	if slots[si].state != "dug" or not can_build(t, si) or not spend(Data.ROOMS[t].cost[0]):
 		return
 	slots[si] = {"state": "built", "type": t, "lvl": 1}
 	if t == "coffin":
 		mmax += 8
 		mhp += 8
-	add_log("You build a %s." % Data.ROOMS[t].name)
+	if t == "stairs":
+		_add_floor()
+		slots[si + FLOOR_SLOTS] = {"state": "dug"}
+		add_log("Your servants break through to floor %d." % floors, "info")
+	else:
+		add_log("You build a %s." % Data.ROOMS[t].name)
 	_layout_changed()
 
 func upgrade(si: int) -> void:
@@ -326,6 +403,9 @@ func demolish(si: int) -> void:
 	var s: Dictionary = slots[si]
 	if Data.ROOMS[s.type].get("fixed", false):
 		return
+	if s.type == "stairs":
+		tip("The floor below hangs from these stairs. They cannot come down.", true)
+		return
 	for m in minions:
 		if m.home == si and not m.free:
 			tip("Lose the minions housed here first.", true)
@@ -339,8 +419,12 @@ func demolish(si: int) -> void:
 	slots[si] = {"state": "dug"}
 	_layout_changed()
 
+## Moving the lair costs 1 hour on the same floor and a whole day to another floor.
+func lair_move_hours(si: int) -> int:
+	return 1 if floor_of_slot(si) == floor_of_slot(slot_idx("lair")) else 3
+
 func move_lair(si: int) -> void:
-	if slots[si].state != "dug" or not spend(0):
+	if slots[si].state != "dug" or not spend(0, lair_move_hours(si)):
 		return
 	var old := slot_idx("lair")
 	var o: Dictionary = slots[old]
@@ -429,9 +513,16 @@ func recruit_room(kind: String) -> String:
 			return t
 	return ""
 
+## Every recruit room houses its own minions, so copies on different floors add up.
 func cap_of(kind: String) -> int:
 	var t := recruit_room(kind)
-	return Data.ROOMS[t].cap * lvl(t) if t != "" else 0
+	if t == "":
+		return 0
+	var c := 0
+	for s in slots:
+		if s.get("type", "") == t:
+			c += Data.ROOMS[t].cap * s.lvl
+	return c
 
 func count_of(kind: String) -> int:
 	var n := 0
@@ -560,6 +651,9 @@ func boon_choices() -> Array:
 	return avail.slice(0, 3)
 
 func dawn(boon: Dictionary) -> void:
+	if day % BOSS_EVERY == 0:
+		bosses += 1
+		add_log("The earth trembles after the boss falls. You can dig a staircase to a new floor.", "info")
 	day += 1
 	if not boon.is_empty():
 		apply_boon(boon.id)
