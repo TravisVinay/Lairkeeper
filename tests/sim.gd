@@ -1,0 +1,174 @@
+extends Node
+## Headless smoke test. Builds the real UI, opens a night, then plays scripted runs with every
+## monster and prints how far each got. Run with:
+##   godot --headless --path . res://tests/sim.tscn
+
+const MainScene := preload("res://scenes/main.tscn")
+
+var _done := false
+var _won := false
+
+
+func _ready() -> void:
+	await _ui_smoke()
+	Game.fast = true
+	for k in Data.MONSTERS:
+		for i in 2:
+			await _play(k)
+	_check_layouts()
+	print("SIM DONE")
+	get_tree().quit()
+
+
+func _ui_smoke() -> void:
+	var main := MainScene.instantiate()
+	add_child(main)
+	for i in 3:
+		await get_tree().process_frame
+	main._choose("necro")
+	await get_tree().process_frame
+	Game.sel = 7
+	Game.build(7, "graveyard")
+	Game.recruit("skeleton")
+	main.refresh()
+	await get_tree().process_frame
+	await main.start_night()
+	for i in 5:
+		await get_tree().process_frame
+	print("UI smoke: board %s, units %d" % [main.board.size, main.battle.units.size()])
+	main.queue_free()
+	await get_tree().process_frame
+
+
+func _check_layouts() -> void:
+	for t in Data.ROOMS:
+		for e in Data.ROOMS[t].objs:
+			if e.size() > 3 and e[3] == 1 and not (Vector2i(e[0], e[1]) in [Vector2i(0, 0), Vector2i(4, 0), Vector2i(0, 4), Vector2i(4, 4), Vector2i(1, 1), Vector2i(3, 1), Vector2i(1, 3), Vector2i(3, 3)]):
+				print("BAD LAYOUT ", t, " ", e)
+
+
+func _on_finished(won: bool) -> void:
+	_done = true
+	_won = won
+
+
+func _build_day() -> void:
+	var order := []
+	for t in Data.ROOMS:
+		if Data.ROOMS[t].get("owner", "") == Game.mk:
+			order.append(t)
+	order += ["barracks", "workshop", "treasury", "torture", "larder", "armory", "collapse", "cistern", "kennel"]
+	for pass_i in 5:
+		if Game.hours <= 0:
+			break
+		var empty := -1
+		for i in Game.slots.size():
+			if Game.slots[i].state == "dug":
+				empty = i
+				break
+		var want := ""
+		for t in order:
+			if Game.can_build(t) and Game.gold >= Data.ROOMS[t].cost[0]:
+				want = t
+				break
+		if empty >= 0 and want != "":
+			Game.build(empty, want)
+			continue
+		var rock := -1
+		for i in Game.slots.size():
+			if Game.diggable(i) and i >= Game.SW:
+				rock = i
+				break
+		if empty < 0 and rock >= 0 and Game.gold >= 40:
+			Game.dig(rock)
+			continue
+		break
+	for k in Data.UNITS:
+		var guard := 0
+		while Game.cap_of(k) > Game.count_of(k) and Game.gold >= Data.UNITS[k].get("cost", 999) + 5 and guard < 10:
+			Game.recruit(k)
+			guard += 1
+	for t in ["rune", "snare", "spikes"]:
+		if Game.trap_unlocked(t):
+			Game.trap_mode = t
+			for i in 60:
+				if Game.traps.size() >= Game.trap_cap() or Game.gold < 15:
+					break
+				var p := Vector2i(randi() % Game.BW, Game.RS + randi() % (Game.BH - Game.RS))
+				if Game.is_open(p) and not Game.traps.has(p):
+					Game.place_trap(p)
+	Game.trap_mode = ""
+
+
+func _play(mk: String) -> void:
+	Game.new_run(mk)
+	var used := {}
+	var line := ""
+	for night in 12:
+		_build_day()
+		var b := Battle.new()
+		add_child(b)
+		b.finished.connect(_on_finished)
+		_done = false
+		b.start()
+		var rounds := 0
+		while not _done and rounds < 80:
+			rounds += 1
+			for sp in Game.M.specials:
+				if _done or not b.can_cast(sp):
+					continue
+				var tiles := b.spell_tiles(sp)
+				var hs := b.alive("h")
+				if sp.kind == "area":
+					tiles = tiles.filter(func(p): return hs.any(func(h): return absi(h.pos.x - p.x) <= 1 and absi(h.pos.y - p.y) <= 1))
+				if sp.id == "nova" and not hs.any(func(h): return Game.man(h.pos, b.mon.pos) <= 2):
+					continue
+				if sp.id == "bats":
+					tiles = tiles.filter(func(p): return hs.any(func(h): return Game.man(h.pos, p) == 1))
+				if sp.id == "lure":
+					tiles = tiles.filter(func(p): return Game.traps.has(p))
+				if sp.id == "snap" and not hs.any(func(h): return Game.man(h.pos, b.mon.pos) <= 5):
+					continue
+				if sp.kind != "self" and tiles.is_empty():
+					continue
+				await b.cast_spell(sp, b.mon.pos if sp.kind == "self" else tiles[0])
+				used[sp.id] = used.get(sp.id, 0) + 1
+			for u in b.alive("p"):
+				if _done:
+					break
+				await b.handle_click(u.pos)
+				var tg := b.targets_for(u)
+				if tg.is_empty() and b.reach.size() > 0 and (u.kind != "monster" or rounds > 1):
+					var best = null
+					var bd := 1 << 30
+					for k in b.reach:
+						if b.reach[k].occ or b.reach[k].d == 0:
+							continue
+						for h in b.alive("h"):
+							if Game.man(k, h.pos) < bd:
+								bd = Game.man(k, h.pos)
+								best = k
+					if best != null:
+						await b.handle_click(best)
+					tg = b.targets_for(u)
+				if tg.size() > 0 and not u.acted:
+					await b.handle_click(u.pos)
+					await b.handle_click(tg[0].pos)
+			if _done:
+				break
+			await b.enemy_turn()
+		var hp := b.mon.hp
+		if not _done:
+			line += " n%d STALEMATE" % Game.day
+			b.queue_free()
+			break
+		if not _won:
+			line += " n%d lost(%d rounds)" % [Game.day, rounds]
+			Game.end_run()
+			b.queue_free()
+			break
+		b.resolve_win()
+		line += " n%d ok(hp %d)" % [Game.day, hp]
+		b.queue_free()
+		Game.dawn(Game.boon_choices()[0])
+	print("%s:%s  spells %s" % [mk, line, used])
