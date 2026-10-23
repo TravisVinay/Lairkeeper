@@ -119,6 +119,7 @@ func start() -> void:
 	Game.sel_minion = null
 	Game.ent_mode = false
 	queue = Game.party.duplicate()
+	Game.stairs_shut = 0
 	mon = mk_unit("p", "monster", Game.monster_start())
 	for m in Game.minions:
 		var u := mk_unit("p", m.kind, m.post)
@@ -204,16 +205,19 @@ func reach_of(u: Unit, avoid := false) -> Dictionary:
 		var cur: Dictionary = R[c]
 		if cur.d >= m:
 			continue
-		for dv in Game.DIRS:
-			var n: Vector2i = c + dv
-			if R.has(n) or not Game.can_step(c, n):
+		for n in Game.steps(c):
+			if R.has(n):
 				continue
 			var o := unit_at(n)
 			if o and o.side != u.side:
 				continue
 			if avoid and Game.traps.has(n):
 				continue
-			R[n] = {"d": cur.d + 1, "prev": c, "occ": false}
+			var nd: int = cur.d + 1
+			# a spiral stair ends a hero's movement at the bottom
+			if u.side == "h" and Game.is_link(c, n) and Game.lvl("stairs") >= 2:
+				nd = maxi(nd, m)
+			R[n] = {"d": nd, "prev": c, "occ": false}
 			q.append(n)
 	for k in R:
 		if k != u.pos and unit_at(k):
@@ -418,7 +422,8 @@ func spell_tiles(sp: Dictionary) -> Array:
 				if Game.man(k, m.pos) <= r and empty_tile(k):
 					o.append(k)
 		_:
-			for y in range(maxi(0, m.pos.y - r), mini(Game.BH - 1, m.pos.y + r) + 1):
+			var f0 := Game.floor_of(m.pos) * Game.BH
+			for y in range(maxi(f0, m.pos.y - r), mini(f0 + Game.BH - 1, m.pos.y + r) + 1):
 				for x in range(maxi(0, m.pos.x - r), mini(Game.BW - 1, m.pos.x + r) + 1):
 					var p := Vector2i(x, y)
 					if Game.man(p, m.pos) > r or not Game.is_open(p):
@@ -572,9 +577,8 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 						break
 					var cur: int = F.get(h.pos, 99)
 					var nx = null
-					for dv in Game.DIRS:
-						var q: Vector2i = h.pos + dv
-						if Game.can_step(h.pos, q) and empty_tile(q) and F.get(q, 99) < cur:
+					for q in Game.steps(h.pos):
+						if empty_tile(q) and F.get(q, 99) < cur:
 							nx = q
 							break
 					if nx == null:
@@ -586,6 +590,21 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 			Game.traps[p] = "spikes"
 			burst(p, Data.col("#e8dcc0"), 10)
 			text(p, "click", Data.col("#e8dcc0"))
+
+## Room power of a level 3 Stairs room: block every staircase for the next 2 hero turns.
+func shut_stairs() -> void:
+	if busy or used.has("stairs") or Game.lvl("stairs") < 3:
+		return
+	used.stairs = true
+	Game.stairs_shut = 2
+	for k in Game.links:
+		burst(k, Data.col("#8a7f90"), 8)
+		for u in units:
+			if u.hp > 0 and u.side == "h" and u.pos == k:
+				hurt(u, 8, TRAP, true)
+	shake = 0.3
+	Game.add_log("You bring down the stairs. Nobody passes between floors for 2 turns.", "info")
+	after_action()
 
 func collapse() -> void:
 	var si := Game.slot_idx("collapse")
@@ -718,6 +737,10 @@ func enemy_turn() -> void:
 	for h in alive("h"):
 		if h.slow > 0: h.slow -= 1
 		if h.conf > 0: h.conf -= 1
+	if Game.stairs_shut > 0:
+		Game.stairs_shut -= 1
+		if Game.stairs_shut == 0:
+			Game.add_log("The rubble on the stairs is cleared.")
 	if queue.size() > 0:
 		admit(2)
 	turn += 1
@@ -882,6 +905,7 @@ func approach(h: Unit, F: Dictionary, target: Unit, r: int) -> void:
 func resolve_win() -> Dictionary:
 	Game.mhp = maxi(1, mon.hp)
 	Game.gold += loot
+	Game.stairs_shut = 0
 	var lost := []
 	for m in Game.minions:
 		var alive_now := false

@@ -23,6 +23,16 @@ func _ready() -> void:
 	Game.sel = 7
 	await _frames(30)
 	_save("res://build/shot_day.png")
+	Game.bosses = 1
+	Game.hours = 6
+	Game.build(2, "stairs")
+	Game.dig(2 + Game.FLOOR_SLOTS + 5)
+	Game.sel = 2 + Game.FLOOR_SLOTS
+	main._show_floor(1)
+	main.refresh()
+	await _frames(30)
+	_save("res://build/shot_floor2.png")
+	main._show_floor(0)
 	await main.start_night()
 	await _frames(60)
 	_save("res://build/shot_night.png")

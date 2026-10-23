@@ -66,6 +66,8 @@ const NAMES := {
 const ROOMS := {
 	"lair": {"name": "Your Lair", "col": "#c0304c", "fixed": true, "cost": [0, 40, 70, 100], "next": "+6 max HP",
 		"objs": [[1, 1, "pillar", 1], [3, 1, "pillar", 1], [1, 3, "pillar", 1], [3, 3, "pillar", 1], [2, 1, "throne"], [2, 2, "rug"], [2, 3, "rug"], [0, 0, "brazier", 1], [4, 0, "brazier", 1]]},
+	"stairs": {"name": "Stairs Down", "col": "#c8b48a", "cost": [60, 45, 70],
+		"objs": [[2, 2, "stairs_down"], [1, 1, "brazier", 1], [3, 3, "brazier", 1]]},
 	"treasury": {"name": "Treasury", "col": "#e4a648", "cost": [25, 40, 60],
 		"objs": [[0, 0, "chest", 1], [4, 0, "chest", 1], [3, 1, "chest", 1], [0, 4, "coins"], [4, 4, "coins"], [1, 1, "coins"], [3, 3, "coins"]]},
 	"larder": {"name": "Larder", "col": "#d08a5a", "cost": [20, 35, 50],
@@ -147,6 +149,9 @@ static func col(hex: String, a := 1.0) -> Color:
 static func room_eff(t: String, l: int) -> String:
 	match t:
 		"lair": return "You start each fight on your throne and take 1 less damage while in here." + (" +%d max HP." % ((l - 1) * 6) if l > 1 else "")
+		"stairs": return ["Leads down to a new floor. One per floor; the floor below starts where these stairs land.",
+			"Spiral stair: heroes who take it stop at the bottom for the rest of their turn.",
+			"Spiral stair. Once per fight you can also collapse every staircase for 2 turns."][l - 1]
 		"treasury": return "+%d gold every dawn. Rogues try to rob it and run." % [12, 20, 30][l - 1]
 		"larder": return "Heal %d HP every dawn." % [6, 10, 15][l - 1]
 		"barracks": return "Recruit up to %d goblins." % (l * 2)
