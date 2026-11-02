@@ -138,11 +138,11 @@ For reference, the 25 rooms already in the game:
 The current game has one run-level layer (pick a boon after each night) and one meta layer
 (souls buy starting gold). That is thin. Below is a fuller structure, split into what
 changes *within* a run and what carries *between* runs. Runs are endless: they end when
-your monster dies or you retire, and the dungeon keeps growing downward (Part 3).
+your monster dies or you retire, and the lair keeps growing upward (Part 3).
 
 ### F. The shape of a run
 
-**S01 Endless runs that grow downward.** *(Replaces the earlier "15 nights and you win" idea.)* A run never ends on its own; it ends when you die or retire. What keeps it moving is depth: every few nights you can dig a new floor, and each floor brings new rooms, richer rewards and tougher heroes. Full design in **Part 3** below.
+**S01 Endless runs that grow upward.** *(Replaces the earlier "15 nights and you win" idea.)* A run never ends on its own; it ends when you die or retire. What keeps it moving is height: every few nights you can build a new floor on top, and each floor brings new rooms, richer rewards and tougher heroes. Full design in **Part 3** below.
 
 **S02 Boss nights every 5 nights.** The pacing beat of an endless run. Each boss night ends with a pick of 1 of 3 **Dark Relics** (see H) and unlocks the next floor's dig. Bosses rotate and escalate: Paladin, then the Archmage Council (three mages that combine spells), then the Chosen One (levels up mid-fight), then they repeat with stacking traits.
 
@@ -191,52 +191,103 @@ run should feel different, not just easier.
 
 ---
 
-## Part 3: Floors and the Stairs room
+## Part 3: Floors and the Stairs room (the lair grows upward)
 
-The run is endless, and the dungeon grows down. This section is the core of the late game.
+The run is endless, and the lair grows **up** into a tower. Heroes always break in on the
+ground floor and have to climb to reach you. This section is the core of the late game.
 
-**Implemented on `feature/floors`:** D01–D04. Differences from the text below: rooms can be
-built once *per floor* (bonuses use the highest level, recruit rooms add up); the Stairs room's
-level 2 is the Spiral Stair and level 3 adds "bring down the stairs" (the Lift is not built yet);
-the lair can move to another floor for 3 hours. Not built yet: D05 onward.
+**Implemented:** D01-D04 (merged in PR #1, flipped to grow upward on
+`feature/map-hud-unlocks-tower`). Differences from the text below: rooms can be built once
+*per floor* (bonuses use the highest level, recruit rooms add up); the Stairs Up room's level 2
+is the Spiral Stair and level 3 adds "bring down the stairs" (the Lift is not built yet); the
+lair can move to another floor for 3 hours. Not built yet: D05 onward.
 
 ### How floors work
 
-**D01 Each floor is its own map.** Floor 1 is today's grid (5x4 room slots of 5x5 tiles). Each new floor starts as solid rock with one dug chamber where the stairs land, and you dig it out room by room like floor 1. A tab strip on the map (Floor 1, Floor 2, ...) switches which floor you are looking at, by day and by night.
+**D01 Each floor is its own map.** The ground floor is the original grid (5x4 room slots of 5x5 tiles), dug out of rock. Each new floor above starts as open air with one chamber where the stairs arrive, and you build it out room by room. A tab strip on the map (Ground floor, Floor 2, ...) switches which floor you are looking at, by day and by night.
 
-**D02 The Stairs room.** A special room, at most one per floor, that connects that floor to the next one down. Building it costs gold and hours, and you can only build it after a boss night (so a new floor opens every 5 nights at most). The stairs arrive on the floor below **in the same slot position**, so where you put your stairs on floor 1 decides where floor 2 starts. Moving the stairs later is allowed but expensive, because the arrival room moves with it.
+**D02 The Stairs Up room.** A special room, at most one per floor, that connects that floor to the next one up. Building it costs gold and hours, and you can only build it after a boss night (so a new floor opens every 5 nights at most). The stairs arrive on the floor above **in the same slot position**, so where you put your stairs decides where the next floor starts.
 
-Stairs room upgrades:
-- **Spiral Stair:** heroes on the stairs can only move 1 tile per turn. A chokepoint between floors.
-- **Collapsible Stair:** once per fight, collapse it for 2 turns. Heroes on the upper floor are stuck there; anyone on the stairs takes heavy damage.
-- **Lift:** your units can move between the two floors in one step, so one monster can defend several floors.
+Stairs upgrades:
+- **Spiral Stair:** heroes who climb it stop at the top for the rest of their turn. A chokepoint between floors.
+- **Collapsible Stair:** once per fight, bring down every staircase for 2 turns. Heroes are stuck on their floor; anyone on the stairs takes heavy damage.
+- **Lift** (not built yet): your units can move between two floors in one step, so one monster can defend several floors.
 
-**D03 Where your lair goes.** Your Lair can be on any floor. Deep is safer, because heroes must survive every floor above it, but floors above you are fought mostly by minions and traps while you wait. Shallow lets your monster fight from the first turn. Moving the lair between floors costs a full day of hours.
+**D03 Where your lair goes.** Your Lair can be on any floor. High up is safer, because heroes must fight through every floor below it, but those floors are held mostly by minions and traps while you wait. Low lets your monster fight from the first turn. Moving the lair between floors costs a full day of hours.
 
-**D04 Heroes descend.** Heroes come in through the surface gate on floor 1 and look for the stairs down once they cannot find you. A fight spans every floor the heroes reach. All floors take their turns together, and the camera jumps to whichever floor is acting. Rogues who rob a deep Treasury have a long way to run back up, which makes deep Treasuries safer.
+**D04 Heroes climb.** Heroes come in through the gate on the ground floor and take the stairs up when that is their shortest way to you. A fight spans every floor the heroes reach. All floors take their turns together, and the camera jumps to whichever floor is acting. Rogues who rob a Treasury high in the tower have a long way to run back down, which makes high Treasuries safer.
 
-**D05 Breaches.** From floor 3 onward, some nights a party skips the gate and tunnels straight into a deeper floor through a random room wall. The breach is shown on the morning scouting report, so you can fortify that room. This stops "just make floor 1 a death maze" from solving every night.
+**D05 Siege ladders.** From floor 3 onward, some nights a party skips the gate and scales the outside of the tower, breaking into an upper floor through an outer wall. The ladder point is shown on the morning scouting report, so you can fortify that room. This stops "just make the ground floor a death maze" from solving every night.
 
-### What deeper floors give you
+### What higher floors give you
 
-**D06 Floor biomes.** Each floor rolls a biome when dug. A biome changes the rules for that floor and unlocks blueprints that can only be built there:
-- **Fungal Depths:** spores confuse heroes now and then. Blueprints: Fungal Grotto, Mushroom Farm.
-- **Magma Layer:** lava cracks in the floor. Blueprints: Lava Forge, Fire Imp Hatchery.
-- **Flooded Caves:** some tiles are deep water that slows everyone. Blueprints: Flooded Sluice, Eel Pool.
-- **Crystal Caverns:** crystals amplify spells but reflect arrows. Blueprints: Hall of Mirrors, Astral Observatory.
-- **Ancient Ruins:** comes with one pre-built ruin room holding a relic, guarded by a dormant golem you can wake and keep.
+**D06 Floor themes.** Each new floor rolls a theme. A theme changes the rules for that floor and unlocks blueprints that can only be built there:
+- **Battlements:** arrow slits along the outer walls; your ranged units get +1 range. Blueprints: Murder Holes, Ballista Nest.
+- **Belfry:** bats and bells; clerics cannot heal heroes on other floors. Blueprints: Bat Colony, Alarm Bell Tower.
+- **Storm Gallery:** lightning strikes a random open tile each round. Blueprints: Lightning Rod, Wind Chamber.
+- **Crystal Spire:** crystals amplify spells but reflect arrows. Blueprints: Hall of Mirrors, Astral Observatory.
+- **Ruined Observatory:** comes with one pre-built ruin room holding a relic, guarded by a dormant golem you can wake and keep.
 
-**D07 Depth pays more.** Heroes killed on a deeper floor drop more gold and souls (+25% per floor below the first). This rewards drawing heroes deep instead of killing them at the door.
+**D07 Height pays more.** Heroes killed on a higher floor drop more gold and souls (+25% per floor above the ground). This rewards drawing heroes up instead of killing them at the door.
 
-**D08 More floors, more upkeep.** You get +1 hour per day for each floor you own, but every floor's minions and traps need looking after: traps sprung on a floor stay sprung until you spend an hour there, and minions on a floor with no Larder or Mushroom Farm slowly lose HP. This keeps a five-floor lair from running itself.
+**D08 More floors, more upkeep.** You get +1 hour per day for each floor you own, but every floor's minions and traps need looking after: traps sprung on a floor stay sprung until you spend an hour there, and minions on a floor with no Larder or Mushroom Farm slowly lose HP. This keeps a five-floor tower from running itself.
 
 ### What keeps an endless run tense
 
-**D09 Infamy keeps rising.** Party size, hero stats and elite traits keep scaling with nights survived and with how many floors you have. There is no ceiling, so every run eventually ends. The question is how deep you get.
+**D09 Infamy keeps rising.** Party size, hero stats and elite traits keep scaling with nights survived and with how many floors you have. There is no ceiling, so every run eventually ends. The question is how high you get.
 
-**D10 Retire on your terms.** Once you have 3 or more floors, you can retire the lair at dawn: the run ends and you bank a large souls bonus based on depth and nights. Dying banks less. Retiring gives a satisfying way to finish a long run instead of grinding until you lose.
+**D10 Retire on your terms.** Once you have 3 or more floors, you can retire the lair at dawn: the run ends and you bank a large souls bonus based on height and nights. Dying banks less.
 
-**D11 Records.** Each run records nights survived, deepest floor and heroes slain, per monster. These feed Steam leaderboards, and a "deepest lair" leaderboard fits the theme well.
+**D11 Records.** Each run records nights survived, highest floor and heroes slain, per monster. These feed Steam leaderboards; a "tallest tower" leaderboard fits the theme.
+
+---
+
+## Part 4: Room catalog: what you start with and what you unlock
+
+**Implemented on `feature/map-hud-unlocks-tower`.** A run only offers starter rooms plus the
+blueprints you have bought. Blueprints are bought with souls on the monster-select screen and
+stay unlocked for every future run. The costs live in `scripts/data.gd` (the `unlock` field).
+
+### Starter rooms (every run)
+
+| Room | Notes |
+| --- | --- |
+| Your Lair | Fixed. One per dungeon. |
+| Stairs Up | Opens new floors after boss nights. |
+| Treasury, Larder, Goblin Barracks, Trap Workshop | The four basics: gold, healing, a cheap minion, traps. |
+| One signature room per monster | Lich: Arcane Library. Vampire Lord: Crypt of Brides. Necromancer: Graveyard. Mind Flayer: Thrall Pens. Mimic: Snare Den. |
+
+### Unlockable now (built and in the game)
+
+| Room | Souls | For |
+| --- | --- | --- |
+| Armory | 25 | Everyone |
+| Flooded Cistern | 25 | Everyone |
+| Hellhound Kennel | 30 | Everyone |
+| Torture Chamber | 35 | Everyone |
+| Collapsing Hall | 40 | Everyone |
+| Velvet Coffin | 30 | Vampire Lord |
+| Blood Pool | 35 | Vampire Lord |
+| Brain Jar Gallery | 35 | Mind Flayer |
+| Clockwork Forge | 35 | Mimic |
+| Mana Well | 40 | Lich |
+| Bone Forge | 40 | Necromancer |
+| Soul Cage | 45 | Necromancer |
+| Rune Chamber | 45 | Mimic |
+| Psionic Amplifier | 50 | Mind Flayer |
+| Phylactery Vault | 55 | Lich |
+
+A run earns roughly 20-40 souls, so a new player unlocks about one room per run early on.
+
+### Planned unlocks (from Part 1, not built yet)
+
+Suggested tiers, so early unlocks are simple and late ones change how you play:
+
+- **Tier 1, cheap (20-40 souls):** R13 Spider Nest, R22 Kobold Warren, R23 Ogre Den, R29 Stitching Room, R36 False Treasury.
+- **Tier 2 (40-70 souls):** R03 Ransom Cells, R10 Dark Hall, R11 Portcullis Gatehouse, R16 Maze of Bones, R28 Training Grounds, R32 Scrying Pool, R40 Shrine of Desecration.
+- **Tier 3, milestones instead of souls:** R09 Chasm Bridge (kill 20 heroes with falls or traps), R20 Teleport Circles (reach floor 3), R55 Gearworks (win 5 nights as the Mimic).
+- **Signature rooms R41-R55:** unlocked through each monster's mastery levels (M02) rather than souls.
+- **Floor-theme rooms (D06):** never unlocked globally; they only appear on a floor with the matching theme.
 
 ---
 
@@ -246,7 +297,7 @@ If we want a strong first pass without overbuilding:
 
 - **Rooms:** R03 Ransom Cells, R09 Chasm Bridge, R10 Dark Hall, R11 Portcullis Gatehouse, R13 Spider Nest, R16 Maze of Bones, R20 Teleport Circles, R22 Kobold Warren, R23 Ogre Den, R28 Training Grounds, R29 Stitching Room, R32 Scrying Pool, R36 False Treasury, R40 Shrine of Desecration, plus one new signature room per monster (R42, R44, R47, R51, R53).
 - **Run structure:** S01 endless runs, S02 boss nights every 5, S03 hero traits, S06 blueprint draft, S09 boon rarity, S11 relics.
-- **Floors:** D01 floor maps, D02 Stairs room, D03 lair on any floor, D04 heroes descend, D06 biomes, D07 depth pays more, D10 retire.
+- **Floors:** D01 floor maps, D02 Stairs Up room, D03 lair on any floor, D04 heroes climb, D06 floor themes, D07 height pays more, D10 retire.
 - **Meta:** M01 blueprint unlocks, M02 monster mastery, M03 heirlooms, M04 dread levels.
 
 Build order I would suggest: floors and the Stairs room first (D01–D04), because they

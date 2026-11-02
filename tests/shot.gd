@@ -9,6 +9,9 @@ func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://build"))
 	var main := MainScene.instantiate()
 	add_child(main)
+	await _frames(10)
+	_save("res://build/shot_start.png")
+	Game.meta.rooms = Data.ROOMS.keys()   # in memory only; this scene never saves
 	await _frames(3)
 	main._choose("vampire")
 	Game.gold = 400
@@ -36,6 +39,11 @@ func _ready() -> void:
 	await main.start_night()
 	await _frames(60)
 	_save("res://build/shot_night.png")
+	var hero = main.battle.alive("h")[0]
+	main.board.look_at_tile(hero.pos)
+	main._on_tile_clicked(hero.pos)
+	await _frames(40)
+	_save("res://build/shot_night_hero.png")
 	get_tree().quit()
 
 

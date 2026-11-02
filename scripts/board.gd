@@ -122,6 +122,10 @@ func screen_to_tile(sp: Vector2) -> Vector2i:
 	var t := Vector2i(floori(w.x), floori(w.y))
 	return t if Game.floor_of(t) == shown_floor and w.y >= 0.0 else Vector2i(-99, -99)
 
+## Where a tile-space point (in tiles, floors stacked) currently appears on screen.
+func tile_to_screen(w: Vector2) -> Vector2:
+	return (w - cam) * cam_z + size / 2.0
+
 func here(p: Vector2i) -> bool:
 	return p.y >= shown_floor * Game.BH and p.y < (shown_floor + 1) * Game.BH
 
@@ -221,7 +225,13 @@ func _draw() -> void:
 			var v := shade(x, y)
 			var r := Rect2(x * T, y * T, T + 1, T + 1)
 			if not Game.is_floor(p):
-				draw_rect(r, Color(0.06 + v * 0.03, 0.05 + v * 0.025, 0.07 + v * 0.03))
+				if shown_floor == 0:
+					draw_rect(r, Color(0.06 + v * 0.03, 0.05 + v * 0.025, 0.07 + v * 0.03))
+				else:
+					# open air around an upper floor of the tower
+					draw_rect(r, Color(0.04 + v * 0.01, 0.05 + v * 0.015, 0.1 + v * 0.03))
+					if v > 0.93:
+						draw_circle(Vector2(x * T + v * 50, y * T + (1.0 - v) * 600), 2.0, Data.col("#ede3cd", 0.5))
 			else:
 				draw_rect(r, Color(0.15 + v * 0.04, 0.13 + v * 0.035, 0.17 + v * 0.04))
 				draw_rect(Rect2(x * T, y * T, T, T), Color(0, 0, 0, 0.35), false, 1.5)
