@@ -6,12 +6,22 @@ const MainScene := preload("res://scenes/main.tscn")
 
 
 func _ready() -> void:
+	Game.no_save = true                   # this scene never writes the player's saves
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://build"))
 	var main := MainScene.instantiate()
 	add_child(main)
 	await _frames(10)
+	_save("res://build/shot_title.png")
+	main.menus.open_catalog(main.menus.show_title)
+	await _frames(10)
+	_save("res://build/shot_catalog.png")
+	main.menus.open_settings(main.menus.show_title)
+	await _frames(10)
+	_save("res://build/shot_settings.png")
+	main.show_start()
+	await _frames(10)
 	_save("res://build/shot_start.png")
-	Game.meta.rooms = Data.ROOMS.keys()   # in memory only; this scene never saves
+	Game.meta.rooms = Data.ROOMS.keys()
 	await _frames(3)
 	main._choose("vampire")
 	Game.gold = 400
@@ -26,6 +36,10 @@ func _ready() -> void:
 	Game.sel = 7
 	await _frames(30)
 	_save("res://build/shot_day.png")
+	main.menus.open_pause()
+	await _frames(10)
+	_save("res://build/shot_pause.png")
+	main.menus.pause_ov.visible = false
 	Game.bosses = 1
 	Game.hours = 6
 	Game.build(2, "stairs")

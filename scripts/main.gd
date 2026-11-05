@@ -4,15 +4,20 @@ extends Control
 
 const BoardScript := preload("res://scripts/board.gd")
 const HudScript := preload("res://scripts/night_hud.gd")
+const MenusScript := preload("res://scripts/menus.gd")
 
 var battle: Battle = null
 var night := false
+## True while a run is being played. Only then is the run autosaved.
+var in_run := false
+var menus: Control
 var board: Control
 var display_font: Font
 
 var body: BoxContainer
 var left: VBoxContainer
 var side: ScrollContainer
+var night_side: ScrollContainer
 var day_box: VBoxContainer
 var hud: Control
 var bbar: HBoxContainer
@@ -43,11 +48,13 @@ func _ready() -> void:
 	theme = _make_theme()
 	_build()
 	Game.changed.connect(refresh)
+	Game.changed.connect(_autosave)
 	Game.logged.connect(render_logs)
 	Game.tipped.connect(_on_tip)
 	get_viewport().size_changed.connect(apply_layout)
-	Game.new_run("vampire")
-	show_start()
+	Settings.changed.connect(apply_layout)
+	Game.new_run("vampire")   # a placeholder dungeon to draw behind the title screen
+	menus.show_title()
 	apply_layout()
 
 
@@ -79,7 +86,9 @@ func _make_theme() -> Theme:
 	th.set_stylebox("pressed", "Button", _box("#241c2e", "#c9a7ff", 6, 10, 2))
 	th.set_stylebox("hover_pressed", "Button", _box("#241c2e", "#c9a7ff", 6, 10, 2))
 	th.set_stylebox("disabled", "Button", _box("#16121a", "#2e2734"))
-	th.set_stylebox("focus", "Button", _box("#00000000", "#e4a648", 6, 10, 2))
+	var focus := _box("#000000", "#e4a648", 6, 10, 2)
+	focus.draw_center = false   # just the outline; C() makes every color opaque
+	th.set_stylebox("focus", "Button", focus)
 	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 		th.set_color(k, "Button", C("#ede3cd"))
 	th.set_color("font_disabled_color", "Button", C("#7a6e76"))
@@ -113,18 +122,76 @@ func title(text: String, col := "#ede3cd", sz := 26) -> Label:
 	l.add_theme_font_override("font", display_font)
 	return l
 
-## A two-line option button: name and cost on top, description below.
-func opt(name: String, cost: String, desc: String, cb: Callable, disabled := false, pressed := false) -> Button:
+## An option card: an optional small tag, the name with cost chips on the right, and a muted
+## description below. Cost parts like "1h", "35g" or "25 souls" are colored, and turn red when
+## you can't pay them, so a greyed-out option shows why.
+func opt(name: String, cost: String, desc: String, cb: Callable, disabled := false, pressed := false, tag := "", tag_col := "#a7998f") -> Control:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 2)
+	if tag != "":
+		v.add_child(lbl(tag.to_upper(), 11, tag_col))
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 6)
+	v.add_child(top)
+	var n := lbl(name, 15, "#ede3cd")
+	n.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(n)
+	if cost != "":
+		for part in cost.split(" · "):
+			top.add_child(_cost_chip(part))
+	if desc != "":
+		v.add_child(lbl(desc, 13, "#b3a59b"))
+	return card(v, cb, disabled, pressed)
+
+func _cost_chip(part: String) -> Label:
+	var col := "#a7998f"
+	var short := false
+	var num := part.to_int()
+	if part.ends_with("souls"):
+		col = "#c9a7ff"
+		short = Game.meta.souls < num
+	elif part.ends_with("h") and part.trim_suffix("h").is_valid_int():
+		col = "#c9a7ff"
+		short = not night and Game.hours < num
+	elif part.ends_with("g") and part.trim_suffix("g").is_valid_int():
+		col = "#e4a648"
+		short = not night and Game.gold < num
+	elif part == "ready":
+		col = "#8fd18f"
+	var l := lbl(part, 14, "#ff7d8f" if short else col, false)
+	l.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	return l
+
+## Wraps any content in a clickable card. A Button sits behind the content and draws the
+## frame and hover states; the content ignores the mouse, so clicks land on the Button.
+## Using a PanelContainer as the root means the card sizes itself to wrapped text.
+func card(content: Control, cb: Callable, disabled := false, pressed := false) -> PanelContainer:
+	var root := PanelContainer.new()
+	root.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	var b := Button.new()
-	b.text = name + ("   ·   " + cost if cost != "" else "") + ("\n" + desc if desc != "" else "")
-	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	b.disabled = disabled
 	b.toggle_mode = pressed
 	b.button_pressed = pressed
-	b.add_theme_font_size_override("font_size", 15)
 	b.pressed.connect(cb)
-	return b
+	root.add_child(b)
+	var m := MarginContainer.new()
+	for k in ["margin_left", "margin_right"]:
+		m.add_theme_constant_override(k, 11)
+	for k in ["margin_top", "margin_bottom"]:
+		m.add_theme_constant_override(k, 8)
+	m.add_child(content)
+	root.add_child(m)
+	_ignore_mouse(m)
+	if disabled:
+		m.modulate = Color(1, 1, 1, 0.5)
+	root.set_meta("button", b)
+	return root
+
+func _ignore_mouse(n: Node) -> void:
+	if n is Control:
+		n.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for c in n.get_children():
+		_ignore_mouse(c)
 
 func panel(parent: Container, min_w := 0.0) -> VBoxContainer:
 	var p := PanelContainer.new()
@@ -178,9 +245,16 @@ func _build() -> void:
 		p.add_child(v)
 		v.add_child(lbl(e[1].to_upper(), 11, "#a7998f", false))
 		var val := lbl("0", 20, e[2], false)
+		val.set_meta("col", e[2])
 		v.add_child(val)
 		stat_vals[e[0]] = val
 		stats.add_child(p)
+	var menu_btn := Button.new()
+	menu_btn.text = "Menu"
+	menu_btn.tooltip_text = "Pause, settings and the room catalog (Esc)"
+	menu_btn.theme_type_variation = "GhostButton"
+	menu_btn.pressed.connect(func(): menus.open_pause())
+	stats.add_child(menu_btn)
 
 	body = BoxContainer.new()
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -208,7 +282,6 @@ func _build() -> void:
 	frame.add_child(board)
 	hud = HudScript.new()
 	frame.add_child(hud)
-	hud.build(self, board)
 	hud.visible = false
 
 	bbar = HBoxContainer.new()
@@ -244,6 +317,16 @@ func _build() -> void:
 	day_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	side_inner.add_child(day_box)
 
+	# night column: the selected unit's card and room powers live here, off the map
+	night_side = ScrollContainer.new()
+	night_side.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	body.add_child(night_side)
+	var dock := VBoxContainer.new()
+	dock.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dock.add_theme_constant_override("separation", 12)
+	night_side.add_child(dock)
+	hud.build(self, board, dock)
+
 	room_box = panel(day_box)
 	layout_box = panel(day_box)
 	trap_box = panel(day_box)
@@ -257,6 +340,9 @@ func _build() -> void:
 	start_ov = _overlay()
 	pick_ov = _overlay()
 	over_ov = _overlay()
+	menus = MenusScript.new()
+	add_child(menus)
+	menus.build(self)
 
 func _log_label(parent: Container) -> RichTextLabel:
 	var r := RichTextLabel.new()
@@ -267,7 +353,7 @@ func _log_label(parent: Container) -> RichTextLabel:
 	parent.add_child(r)
 	return r
 
-func _overlay() -> Control:
+func _overlay(parent: Node = null) -> Control:
 	var o := Control.new()
 	o.set_anchors_preset(Control.PRESET_FULL_RECT)
 	o.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -293,7 +379,7 @@ func _overlay() -> Control:
 	o.set_meta("box", v)
 	o.set_meta("center", center)
 	o.set_meta("card", p)
-	add_child(o)
+	(parent if parent else self).add_child(o)
 	return o
 
 func apply_layout() -> void:
@@ -302,12 +388,15 @@ func apply_layout() -> void:
 	for o in [start_ov, pick_ov, over_ov]:
 		o.get_meta("card").custom_minimum_size.x = minf(1080.0, vp.x - 40.0)
 		o.get_meta("center").custom_minimum_size = vp
+	menus.apply_layout(vp)
 	body.vertical = narrow
-	side.custom_minimum_size = Vector2(0, 320) if narrow else Vector2(360, 0)
-	side.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
-	# at night the map is the whole interface
+	for s in [side, night_side]:
+		s.custom_minimum_size = Vector2(0, 320) if narrow else Vector2(320 if s == night_side else 360, 0)
+		s.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		s.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
+	# at night the map takes the space, with a slim column for the selected unit
 	side.visible = not night
+	night_side.visible = night
 	bbar.visible = not night
 	tip_lbl.visible = not night
 	hud.visible = night
@@ -322,10 +411,13 @@ func refresh() -> void:
 	stat_vals.gold.text = str(Game.gold)
 	stat_vals.hp.text = "%d/%d" % [battle.mon.hp if battle else Game.mhp, Game.mmax]
 	stat_vals.souls.text = str(Game.souls)
+	var out_of_time := not night and Game.hours <= 0
+	stat_vals.hours.add_theme_color_override("font_color", C("#ff7d8f" if out_of_time else stat_vals.hours.get_meta("col")))
+	stat_vals.hours.get_parent().get_parent().visible = not night
 	if night:
 		render_night()
 	else:
-		turn_lbl.text = "Day %d · %d hour%s left" % [Game.day, Game.hours, "" if Game.hours == 1 else "s"]
+		turn_lbl.text = "Day %d · out of time, let night fall" % Game.day if out_of_time else "Day %d · %d hour%s left" % [Game.day, Game.hours, "" if Game.hours == 1 else "s"]
 		render_room_panel()
 		render_layout_panel()
 		render_trap_panel()
@@ -333,6 +425,12 @@ func refresh() -> void:
 		render_party()
 	render_floor_tabs()
 	render_logs()
+	if menus.pause_ov.visible:
+		menus.render_pause()   # Quit unlocks once the heroes finish moving
+
+func _autosave() -> void:
+	if in_run and battle == null:
+		Game.save_run()
 
 ## One tab per floor. At night each tab also counts the heroes on that floor.
 func render_floor_tabs() -> void:
@@ -441,7 +539,7 @@ func render_room_panel() -> void:
 		if not R.get("fixed", false):
 			room_box.add_child(opt("Tear it down", "1h", "No refund. Leaves an empty chamber.", func(): Game.demolish(i), Game.hours < 1))
 
-func _room_opt(i: int, t: String) -> Button:
+func _room_opt(i: int, t: String) -> Control:
 	var R: Dictionary = Data.ROOMS[t]
 	var c: int = R.cost[0]
 	return opt(R.name, "1h · %dg" % c, Data.room_eff(t, 1), func(): Game.build(i, t), Game.gold < c or Game.hours < 1)
@@ -522,7 +620,7 @@ func render_night() -> void:
 # ---------------------------------------------------------------- input
 
 func _on_tile_clicked(p: Vector2i) -> void:
-	if start_ov.visible or pick_ov.visible or over_ov.visible:
+	if start_ov.visible or pick_ov.visible or over_ov.visible or menus.is_open():
 		return
 	if battle == null:
 		Game.day_click(p)
@@ -572,7 +670,7 @@ func _toggle_fit() -> void:
 		board.look_at_tile(p, board.night_z())
 
 func _unhandled_input(e: InputEvent) -> void:
-	if battle == null or battle.over or pick_ov.visible or over_ov.visible:
+	if battle == null or battle.over or pick_ov.visible or over_ov.visible or menus.is_open():
 		return
 	if not (e is InputEventKey and e.pressed and not e.echo):
 		return
@@ -635,6 +733,7 @@ func _on_finished(won: bool) -> void:
 		Platform.on_night_survived(Game.day)
 		_show_pick(r)
 	else:
+		in_run = false
 		var earned := Game.end_run()
 		_show_over(earned)
 
@@ -672,42 +771,49 @@ func _show_over(earned: int) -> void:
 		if s.state != "rock":
 			dug += 1
 	v.add_child(lbl("Nights survived: %d    Heroes defeated: %d    Rooms dug: %d    Souls banked: %d" % [Game.day - 1, Game.kills, dug, Game.meta.souls], 17))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	v.add_child(row)
 	var bt := Button.new()
 	bt.text = "Rise again"
 	bt.theme_type_variation = "PrimaryButton"
 	bt.pressed.connect(_rise_again)
-	v.add_child(bt)
+	row.add_child(bt)
+	var mb := Button.new()
+	mb.text = "Title screen"
+	mb.theme_type_variation = "GhostButton"
+	mb.pressed.connect(quit_to_menu)
+	row.add_child(mb)
 	over_ov.visible = true
 
 func show_start() -> void:
+	menus.hide_all()
 	var v: VBoxContainer = start_ov.get_meta("box")
 	clear(v)
-	v.add_child(title("Choose your monstrous form", "#e4a648", 38))
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var ht := title("Choose your monstrous form", "#e4a648", 38)
+	ht.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(ht)
+	var back := Button.new()
+	back.text = "Back  (Esc)"
+	back.theme_type_variation = "GhostButton"
+	back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	back.pressed.connect(func(): menus.show_title())
+	head.add_child(back)
 	v.add_child(lbl("You start with a cave mouth, two empty chambers and your lair. Dig outward, room by room. Every room is real ground the heroes must cross, so where you put your lair, your traps and your minions decides every fight.", 16, "#a7998f"))
-	var flow := HFlowContainer.new()
-	flow.add_theme_constant_override("h_separation", 12)
-	flow.add_theme_constant_override("v_separation", 12)
-	v.add_child(flow)
+	var grid := GridContainer.new()
+	var card_w := minf(1080.0, get_viewport_rect().size.x - 40.0) - 48.0
+	grid.columns = clampi(int(card_w / 320.0), 1, 3)
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	v.add_child(grid)
 	for k in Data.MONSTERS:
-		var M: Dictionary = Data.MONSTERS[k]
-		var rooms := []
-		for t in Data.ROOMS:
-			if Data.ROOMS[t].get("owner", "") == k:
-				rooms.append(Data.ROOMS[t].name)
-		var spells := []
-		for sp in M.specials:
-			spells.append("%s: %s" % [sp.name, sp.desc])
-		var b := Button.new()
-		b.text = "%s\n%s\n%d HP · moves %d · %s %d dmg, range %d\n%s\n\n%s\n\nRooms: %s" % [M.role.to_upper(), M.name, M.hp, M.move, M.attack, M.atk, M.rng, M.blurb, "\n".join(spells), ", ".join(rooms)]
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.custom_minimum_size = Vector2(320, 0)
-		b.add_theme_font_size_override("font_size", 14)
-		b.add_theme_color_override("font_color", C(M.col))
-		b.pressed.connect(func(): _choose(k))
-		flow.add_child(b)
-	_blueprints(v)
+		var c := _monster_card(k)
+		c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(c)
 	var meta := HBoxContainer.new()
+	meta.add_theme_constant_override("separation", 8)
 	v.add_child(meta)
 	var ml := lbl("Souls banked: %d · Most nights survived: %d" % [Game.meta.souls, Game.meta.best], 15, "#c9a7ff", false)
 	ml.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -720,41 +826,36 @@ func show_start() -> void:
 	hb.disabled = l >= 3 or Game.meta.souls < price
 	hb.pressed.connect(_buy_hoard.bind(price))
 	meta.add_child(hb)
+	var cat := Button.new()
+	cat.theme_type_variation = "GhostButton"
+	cat.text = "Room catalog"
+	cat.tooltip_text = "See every room and spend souls to unlock more."
+	cat.pressed.connect(func():
+		start_ov.visible = false
+		menus.open_catalog(show_start))
+	meta.add_child(cat)
 	start_ov.visible = true
 
-## The blueprint shop: rooms bought with souls stay unlocked for every future run.
-func _blueprints(v: VBoxContainer) -> void:
-	var total := 0
-	var open := 0
+func _monster_card(k: String) -> Control:
+	var M: Dictionary = Data.MONSTERS[k]
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	v.add_child(lbl(M.role.to_upper(), 12, M.col))
+	v.add_child(title(M.name, M.col, 24))
+	v.add_child(lbl("%d HP · moves %d · %s %d dmg, range %d" % [M.hp, M.move, M.attack, M.atk, M.rng], 14, "#ede3cd"))
+	v.add_child(lbl(M.blurb, 14, "#b3a59b"))
+	for sp in M.specials:
+		var s := VBoxContainer.new()
+		s.add_theme_constant_override("separation", 0)
+		s.add_child(lbl(sp.name, 14, M.col))
+		s.add_child(lbl(sp.desc, 13, "#b3a59b"))
+		v.add_child(s)
+	var rooms := []
 	for t in Data.ROOMS:
-		if not Data.ROOMS[t].get("fixed", false):
-			total += 1
-			if Game.is_unlocked(t):
-				open += 1
-	v.add_child(h3("Blueprints · %d of %d rooms unlocked" % [open, total]))
-	var locked := []
-	for t in Data.ROOMS:
-		if not Game.is_unlocked(t):
-			locked.append(t)
-	if locked.is_empty():
-		v.add_child(lbl("Every room is unlocked.", 14, "#a7998f"))
-		return
-	v.add_child(lbl("Every run starts with the basics and one signature room. Spend souls here to add more rooms to every future run.", 14, "#a7998f"))
-	var flow := HFlowContainer.new()
-	flow.add_theme_constant_override("h_separation", 8)
-	flow.add_theme_constant_override("v_separation", 8)
-	v.add_child(flow)
-	locked.sort_custom(func(a, c): return Data.ROOMS[a].unlock < Data.ROOMS[c].unlock)
-	for t in locked:
-		var R: Dictionary = Data.ROOMS[t]
-		var who: String = (" · " + Data.MONSTERS[R.owner].name) if R.has("owner") else ""
-		var b := opt(R.name + who, "%d souls" % R.unlock, Data.room_eff(t, 1), _unlock.bind(t), Game.meta.souls < R.unlock)
-		b.custom_minimum_size = Vector2(250, 0)
-		flow.add_child(b)
-
-func _unlock(t: String) -> void:
-	if Game.unlock_room(t):
-		show_start()
+		if Data.ROOMS[t].get("owner", "") == k:
+			rooms.append(Data.ROOMS[t].name)
+	v.add_child(lbl("Rooms: " + ", ".join(rooms), 13, "#8a7f90"))
+	return card(v, func(): _choose(k))
 
 func _rise_again() -> void:
 	over_ov.visible = false
@@ -769,7 +870,36 @@ func _buy_hoard(price: int) -> void:
 
 func _choose(k: String) -> void:
 	start_ov.visible = false
+	menus.hide_all()
+	in_run = true
 	Game.new_run(k)
 	board.show_floor(0)
 	board.fit(true)
 	Game.tip("Click a chamber to build in it, or the rock beside your rooms to dig. Heroes enter at the glowing gate.")
+
+## Picks up the saved run. Runs are saved by day, so this always lands on a day.
+func continue_run() -> void:
+	if not Game.load_run():
+		menus.show_title()
+		return
+	menus.hide_all()
+	in_run = true
+	subtitle.text = "%s. Dig, build, and set the trap." % Game.M.name
+	board.show_floor(Game.floor_of_slot(Game.slot_idx("lair")))
+	board.fit(true)
+	refresh()
+	Game.tip("Welcome back. Your dungeon is as you left it. Night %d is coming." % Game.day)
+
+## Leaves the run for the title screen. By day the run is already saved; at night the fight
+## is dropped and Continue starts it over from dusk.
+func quit_to_menu() -> void:
+	if battle != null and battle.busy:
+		return
+	if battle == null and in_run:
+		Game.save_run()
+	in_run = false
+	over_ov.visible = false
+	pick_ov.visible = false
+	menus.show_title()
+	if battle != null:
+		await end_night()

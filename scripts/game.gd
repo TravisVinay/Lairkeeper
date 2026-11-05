@@ -14,10 +14,17 @@ const FLOOR_SLOTS := SW * SH
 const BOSS_EVERY := 5
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 const META_PATH := "user://meta.json"
+## Where the run in progress is saved. Tests point it elsewhere.
+var run_path := "user://run.save"
+## Everything a run needs to resume. Layout, furniture and stairs are rebuilt from slots.
+const RUN_KEYS := ["mk", "day", "hours", "gold", "mhp", "mmax", "souls", "kills", "logs", "taken", "b",
+	"slots", "traps", "minions", "entrance", "floors", "bosses", "party", "_uid"]
 
 var meta := {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
 ## Skips animation waits and saving. The headless tests turn this on.
 var fast := false
+## Keeps animations but never writes saves. The screenshot scene turns this on.
+var no_save := false
 
 var mk := ""
 var M := {}
@@ -72,11 +79,70 @@ func load_meta() -> void:
 
 
 func save_meta() -> void:
-	if fast:
-		return   # headless tests must never touch the player's save
+	if fast or no_save:
+		return   # tests must never touch the player's save
 	var f := FileAccess.open(META_PATH, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(meta))
+
+
+## Wipes souls, unlocks and any run in progress.
+func reset_meta() -> void:
+	meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
+	save_meta()
+	clear_run()
+
+
+# ---------------------------------------------------------------- run saving
+# The run is saved by day only. Quitting mid-night resumes at dusk of that night.
+
+func has_run() -> bool:
+	return FileAccess.file_exists(run_path) and not run_summary().is_empty()
+
+func save_run() -> void:
+	if fast or no_save or mk == "":
+		return
+	var d := {}
+	for k in RUN_KEYS:
+		d[k] = get(k)
+	var f := FileAccess.open(run_path, FileAccess.WRITE)
+	if f:
+		f.store_string(var_to_str(d))
+
+func _read_run() -> Dictionary:
+	if not FileAccess.file_exists(run_path):
+		return {}
+	var d = str_to_var(FileAccess.get_file_as_string(run_path))
+	if not d is Dictionary or not Data.MONSTERS.has(d.get("mk", "")):
+		return {}
+	return d
+
+## Monster and night of the saved run, for the Continue button. Empty if there is none.
+func run_summary() -> Dictionary:
+	var d := _read_run()
+	return {} if d.is_empty() else {"mk": d.mk, "day": d.get("day", 1)}
+
+func load_run() -> bool:
+	var d := _read_run()
+	if d.is_empty():
+		return false
+	for k in RUN_KEYS:
+		if d.has(k):
+			set(k, d[k])
+	M = Data.MONSTERS[mk]
+	stairs_shut = 0
+	sel = slot_idx("lair")
+	sel_minion = null
+	trap_mode = ""
+	ent_mode = false
+	rebuild_objs()
+	changed.emit()
+	logged.emit()
+	return true
+
+func clear_run() -> void:
+	if not fast and not no_save and FileAccess.file_exists(run_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(run_path))
 
 
 # ---------------------------------------------------------------- run setup
@@ -698,4 +764,5 @@ func end_run() -> int:
 	meta.souls += earned
 	meta.best = maxi(meta.best, day - 1)
 	save_meta()
+	clear_run()
 	return earned

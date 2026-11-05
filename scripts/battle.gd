@@ -72,7 +72,7 @@ func _init() -> void:
 func wait(t: float) -> void:
 	if Game.fast or not is_inside_tree():
 		return
-	await get_tree().create_timer(t).timeout
+	await get_tree().create_timer(t / Settings.battle_speed).timeout
 
 
 func say(msg: String, warn := false) -> void:

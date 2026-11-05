@@ -302,7 +302,8 @@ func _draw() -> void:
 	draw_set_transform_matrix(xf)
 
 	# room labels
-	var fs := int(maxf(18.0, 11.0 * T / cam_z))
+	var fs := int(maxf(18.0, 13.0 * T / cam_z))
+	var pad := fs * 0.35
 	for si in range(s0, s0 + Game.FLOOR_SLOTS):
 		var sl: Dictionary = Game.slots[si]
 		if sl.state == "rock":
@@ -312,9 +313,12 @@ func _draw() -> void:
 		if sl.get("lvl", 1) > 1:
 			nm += " " + "I".repeat(sl.lvl)
 		var col := Data.col("#8a7f90") if sl.state == "dug" else (mcol if sl.type == "lair" else Data.col(Data.ROOMS[sl.type].col))
-		col.a = 0.5 if battle else 0.95
-		draw_string(font, o + Vector2(11, fs + 5), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0, 0, 0, col.a * 0.7))
-		draw_string(font, o + Vector2(10, fs + 4), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+		col.a = 0.75 if battle else 1.0
+		# a dark plate behind the name keeps it readable over floor and furniture
+		var ts := font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		var at := o + Vector2(pad, pad)
+		draw_rect(Rect2(at, Vector2(ts.x + pad * 2.0, ts.y + pad * 0.6)), Color(0.05, 0.04, 0.06, 0.45 if battle else 0.72))
+		draw_string(font, at + Vector2(pad, pad * 0.3 + font.get_ascent(fs)), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 	if battle:
 		for k in battle.corpses:

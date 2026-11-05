@@ -37,12 +37,14 @@ powershell -File tools\check.ps1 -Sim
 | File | What it owns |
 | --- | --- |
 | `scripts/data.gd` | All content: monsters, spells, units, heroes, rooms and their furniture, traps, boons. Balance changes usually start here. |
-| `scripts/game.gd` | The `Game` autoload: the current run, dungeon geometry (walls, doorways, line of sight, pathing) and every day action. Also saves meta progress to `user://meta.json`. Floors are stacked in one coordinate space (floor *f* covers tile rows *f*×20 to *f*×20+19), and `links` holds the stairs between them, so pathing and line of sight work across floors without special cases. |
+| `scripts/game.gd` | The `Game` autoload: the current run, dungeon geometry (walls, doorways, line of sight, pathing) and every day action. Also saves meta progress to `user://meta.json` and the run in progress to `user://run.save` (by day only; quitting mid-night restarts that night). Floors are stacked in one coordinate space (floor *f* covers tile rows *f*×20 to *f*×20+19), and `links` holds the stairs between them, so pathing and line of sight work across floors without special cases. |
 | `scripts/battle.gd` | One night's fight: units, turns, spells, traps, room powers and hero AI. |
 | `scripts/board.gd` | The map view: camera (fit by day, zoomed and draggable at night), drawing, and pointer input. |
 | `scripts/sprites.gd` | Placeholder art drawn with shapes. Replace any function with real textures without touching game logic. |
-| `scripts/main.gd` | The interface: header, day panels, overlays, the blueprint shop and the day/night layout switch. |
+| `scripts/main.gd` | The interface: header, day panels, the monster pick, night results and the day/night layout switch. Starts, continues and quits runs. |
+| `scripts/menus.gd` | The title screen (Continue, New run, Room catalog, Settings, Exit game), the room catalog where souls unlock rooms, settings, the Esc pause menu and confirm boxes. |
 | `scripts/night_hud.gd` | The fight interface drawn over the map: round and hints, camera and End turn, room powers, a short log, and the pop-up next to the unit you click. |
+| `scripts/settings.gd` | The `Settings` autoload: fullscreen, interface size and battle speed, saved to `user://settings.cfg`. |
 | `scripts/platform.gd` | The `Platform` autoload: Steam achievements through GodotSteam when it is installed, a no-op everywhere else. |
 
 ## Shipping it
@@ -76,7 +78,6 @@ there too; both need a Mac with Xcode to sign and build.
 
 - Art is placeholder shapes. Commission or draw sprites and swap them into `sprites.gd`.
 - No sound or music yet.
-- The current run is not saved if the app closes mid-run (only meta progress is). Mobile
-  stores expect this, so add run saving before shipping there.
+- Runs are saved by day only. Closing the app mid-fight restarts that night from dusk.
 - Touch pinch-to-zoom is not handled yet; trackpad pinch and the zoom buttons work.
 - The UI font falls back to the system serif. Add a licensed font file for a consistent look.

@@ -1,7 +1,7 @@
 extends Control
-## The fight interface, drawn on top of the map: round and hints top-left, camera and End turn
-## top-right, room powers under them, a short battle log bottom-left, and a small pop-up next
-## to whichever unit you clicked. Everything else at night is the map itself.
+## The fight interface. On the map: round and hints top-left, camera and End turn top-right,
+## and a short battle log bottom-left. In the column beside the map: the card for whichever
+## unit you clicked, and room powers. Nothing pops up over the map itself.
 
 var ui            # main.gd, for its widget helpers
 var board
@@ -15,25 +15,33 @@ var end_btn: Button
 var fit_btn: Button
 var powers: VBoxContainer
 var log_rt: RichTextLabel
-var popup: PanelContainer
+var popup: PanelContainer      # the selected unit's card, docked beside the map
 var pop_box: VBoxContainer
-var _pop_unit = null
+var idle: PanelContainer       # shown in the dock when nothing is selected
+var idle_lbl: Label
 
 
-func build(main_ui, board_node) -> void:
+## dock is the night column beside the map: the selected unit's card and room powers go there.
+func build(main_ui, board_node, dock: Container) -> void:
 	ui = main_ui
 	board = board_node
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	var tp := PanelContainer.new()
+	tp.add_theme_stylebox_override("panel", ui._box("#140f17", "#3a3040", 6, 10))
+	tp.self_modulate = Color(1, 1, 1, 0.6)   # see-through enough to spot units under it
+	tp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tp.position = Vector2(12, 12)
+	add_child(tp)
 	var tl := VBoxContainer.new()
 	tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	tl.position = Vector2(14, 10)
-	add_child(tl)
+	tl.add_theme_constant_override("separation", 2)
+	tp.add_child(tl)
 	round_lbl = _outlined(ui.title("", "#e4a648", 24))
 	tl.add_child(round_lbl)
 	tip_lbl = _outlined(ui.lbl("", 14, "#ede3cd"))
-	tip_lbl.custom_minimum_size.x = 440
+	tip_lbl.custom_minimum_size.x = 420
 	tl.add_child(tip_lbl)
 
 	var tr := HBoxContainer.new()
@@ -49,23 +57,33 @@ func build(main_ui, board_node) -> void:
 	fit_btn = Button.new()
 	fit_btn.text = "Whole map"
 	fit_btn.theme_type_variation = "GhostButton"
+	fit_btn.tooltip_text = "Drag or WASD / arrow keys to pan.\nEsc deselects. 1 and 2 cast your spells."
 	fit_btn.pressed.connect(ui._toggle_fit)
 	tr.add_child(fit_btn)
 	end_btn = Button.new()
-	end_btn.text = "End turn"
+	end_btn.text = "End turn  (E)"
 	end_btn.theme_type_variation = "PrimaryButton"
 	end_btn.pressed.connect(_end_turn)
 	tr.add_child(end_btn)
 	tr.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT, Control.PRESET_MODE_MINSIZE, 12)
 	tr.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 
+	popup = PanelContainer.new()
+	popup.add_theme_stylebox_override("panel", ui._box("#28212e", "#e4a648", 8, 12))
+	popup.visible = false
+	dock.add_child(popup)
+	pop_box = VBoxContainer.new()
+	pop_box.add_theme_constant_override("separation", 6)
+	popup.add_child(pop_box)
+
+	idle = PanelContainer.new()
+	dock.add_child(idle)
+	idle_lbl = ui.lbl("", 14, "#a7998f")
+	idle.add_child(idle_lbl)
+
 	powers = VBoxContainer.new()
 	powers.add_theme_constant_override("separation", 6)
-	powers.custom_minimum_size.x = 250
-	add_child(powers)
-	powers.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT, Control.PRESET_MODE_MINSIZE, 12)
-	powers.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	powers.offset_top = 62
+	dock.add_child(powers)
 
 	var lp := PanelContainer.new()
 	lp.add_theme_stylebox_override("panel", ui._box("#140f17", "#3a3040", 6, 8))
@@ -82,15 +100,6 @@ func build(main_ui, board_node) -> void:
 	lp.add_child(log_rt)
 	lp.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT, Control.PRESET_MODE_MINSIZE, 12)
 	lp.grow_vertical = Control.GROW_DIRECTION_BEGIN
-
-	popup = PanelContainer.new()
-	popup.add_theme_stylebox_override("panel", ui._box("#28212e", "#e4a648", 8, 12))
-	popup.custom_minimum_size = Vector2(280, 0)
-	popup.visible = false
-	add_child(popup)
-	pop_box = VBoxContainer.new()
-	pop_box.add_theme_constant_override("separation", 6)
-	popup.add_child(pop_box)
 
 func _end_turn() -> void:
 	if battle:
@@ -128,8 +137,9 @@ func render() -> void:
 	if inspect != null and inspect.hp <= 0:
 		inspect = null
 	var u = inspect if inspect != null else battle.sel
-	_pop_unit = u
 	popup.visible = u != null and not battle.busy
+	idle.visible = not popup.visible
+	idle_lbl.text = "The heroes are moving..." if battle.busy else "Click one of your units to act, or a hero to see where it can strike."
 	if not popup.visible:
 		return
 	ui.clear(pop_box)
@@ -154,13 +164,12 @@ func _render_friend(u) -> void:
 		hint = "Moved. Attack a hero ringed in red, or finish this unit."
 	pop_box.add_child(ui.lbl(hint, 12, "#a7998f"))
 	if u.kind == "monster":
-		for sp in Game.M.specials:
+		for si in Game.M.specials.size():
+			var sp: Dictionary = Game.M.specials[si]
 			var cd: int = u.cds.get(sp.id, 0)
 			var state := ("%d turn%s" % [cd, "s" if cd > 1 else ""]) if cd > 0 else ("cancel" if battle.mode == sp.id else "ready")
-			var b: Button = ui.opt(sp.name, state, sp.desc + ("" if sp.get("free", false) else " Uses your action."),
-				func(): battle.arm_spell(sp.id), not battle.can_cast(sp), battle.mode == sp.id)
-			b.add_theme_font_size_override("font_size", 13)
-			pop_box.add_child(b)
+			pop_box.add_child(ui.opt("%s  (%d)" % [sp.name, si + 1], state, sp.desc + ("" if sp.get("free", false) else " Uses your action."),
+				func(): battle.arm_spell(sp.id), not battle.can_cast(sp), battle.mode == sp.id))
 	var done := Button.new()
 	done.text = "Finish this unit"
 	done.theme_type_variation = "GhostButton"
@@ -194,26 +203,3 @@ func _render_powers() -> void:
 		powers.add_child(ui.opt("Bring down the stairs", "used" if battle.used.has("stairs") else "once",
 			"No one moves between floors for 2 hero turns.",
 			func(): battle.shut_stairs(), battle.used.has("stairs") or battle.busy))
-	for b in powers.get_children():
-		b.add_theme_font_size_override("font_size", 13)
-
-
-# ---------------------------------------------------------------- pop-up placement
-
-func _process(_dt: float) -> void:
-	if not visible or not popup.visible or _pop_unit == null:
-		return
-	var u = _pop_unit
-	if u.hp <= 0 or not board.here(u.pos):
-		popup.modulate.a = 0.0
-		return
-	popup.modulate.a = 1.0
-	popup.size = popup.get_combined_minimum_size()
-	var sp: Vector2 = board.tile_to_screen(u.draw_pos + Vector2(0.5, 0.5))
-	var gap: float = board.cam_z * 0.75
-	var p := Vector2(sp.x + gap, sp.y - popup.size.y / 2.0)
-	if p.x + popup.size.x > size.x - 10.0:
-		p.x = sp.x - gap - popup.size.x
-	p.x = clampf(p.x, 10.0, maxf(10.0, size.x - popup.size.x - 10.0))
-	p.y = clampf(p.y, 10.0, maxf(10.0, size.y - popup.size.y - 10.0))
-	popup.position = p

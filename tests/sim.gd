@@ -13,6 +13,7 @@ func _ready() -> void:
 	Game.fast = true                       # no animation waits, and never write the real save
 	Game.meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
 	_unlock_test()
+	_save_test()
 	Game.meta.rooms = Data.ROOMS.keys()   # the scripted runs may use every room
 	await _ui_smoke()
 	await _floor_test()
@@ -88,6 +89,30 @@ func _floor_test() -> void:
 	if deepest < 2: errors.append("heroes never reached floor 3 (deepest %d)" % (deepest + 1))
 	print("FLOORS: %s (heroes reached floor %d in %d rounds)" % ["ok" if errors.is_empty() else "FAIL " + "; ".join(errors), deepest + 1, rounds])
 	b.queue_free()
+
+
+## Saves a run mid-day to a scratch file, scrambles the state, loads it back and compares.
+func _save_test() -> void:
+	Game.run_path = "user://sim_run.save"
+	Game.fast = false                      # saving is off in fast mode; the path above is a scratch file
+	Game.new_run("mimic")
+	Game.gold = 500
+	Game.dig(6)
+	Game.build(6, "snareden")
+	Game.trap_mode = "snare"
+	Game.place_trap(Vector2i(7, 7))
+	Game.add_minion("goblin", true)
+	Game.save_run()
+	var want := [Game.gold, Game.hours, Game.slots.duplicate(true), Game.traps.duplicate(), Game.minions.size(), Game.minions[0].post, Game.entrance]
+	Game.new_run("lich")
+	var ok: bool = Game.has_run() and Game.run_summary().mk == "mimic" and Game.load_run()
+	var got := [Game.gold, Game.hours, Game.slots, Game.traps, Game.minions.size(), Game.minions[0].post, Game.entrance]
+	ok = ok and Game.mk == "mimic" and Game.M == Data.MONSTERS.mimic and got == want and Game.traps.size() == 1 and Game.obj.size() > 0
+	Game.clear_run()
+	ok = ok and not Game.has_run()
+	Game.fast = true
+	Game.run_path = "user://run.save"
+	print("SAVE: ", "ok" if ok else "BAD %s vs %s" % [got, want])
 
 
 func _unlock_test() -> void:
