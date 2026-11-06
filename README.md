@@ -22,7 +22,7 @@ From a terminal:
 
 ## Test it
 
-`tests/sim.tscn` builds the real UI, opens a night, then plays two scripted runs with every
+`tests/sim.tscn` builds the real UI, opens a night, then plays the tutorial and two scripted runs with every
 monster and prints how far each one got. `tools/check.ps1` runs it headless and shows only
 errors and results:
 
@@ -44,6 +44,7 @@ powershell -File tools\check.ps1 -Sim
 | `scripts/main.gd` | The interface: header, day panels, the monster pick, night results and the day/night layout switch. Starts, continues and quits runs. |
 | `scripts/menus.gd` | The title screen (Continue, New run, Room catalog, Settings, Exit game), the room catalog where souls unlock rooms, settings, the Esc pause menu and confirm boxes. |
 | `scripts/night_hud.gd` | The fight interface drawn over the map: round and hints, camera and End turn, room powers, a short log, and the pop-up next to the unit you click. |
+| `scripts/tutorial.gd` | The guided tutorial: five scripted Vampire Lord nights as a list of steps (what to say, which chamber to point at, which actions to allow, when the step is done). After night 5 the run carries on normally. |
 | `scripts/settings.gd` | The `Settings` autoload: fullscreen, interface size and battle speed, saved to `user://settings.cfg`. |
 | `scripts/platform.gd` | The `Platform` autoload: Steam achievements through GodotSteam when it is installed, a no-op everywhere else. |
 

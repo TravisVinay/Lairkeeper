@@ -11,16 +11,22 @@ const RS := 5
 const BW := SW * RS
 const BH := SH * RS          # tile rows per floor
 const FLOOR_SLOTS := SW * SH
+## Nights between boss nights; Restless Crusade makes it 4. See boss_every().
 const BOSS_EVERY := 5
+## Dread modifiers unlock once a run has survived this many nights (that is, reached night 5).
+const MODS_UNLOCK_BEST := 4
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-const META_PATH := "user://meta.json"
+## Meta progress (souls, unlocks, records). Playtest builds keep their own files; see _ready().
+var meta_path := "user://meta.json"
 ## Where the run in progress is saved. Tests point it elsewhere.
 var run_path := "user://run.save"
 ## Everything a run needs to resume. Layout, furniture and stairs are rebuilt from slots.
 const RUN_KEYS := ["mk", "day", "hours", "gold", "mhp", "mmax", "souls", "kills", "logs", "taken", "b",
-	"slots", "traps", "minions", "entrance", "floors", "bosses", "party", "_uid"]
+	"slots", "traps", "minions", "entrance", "floors", "bosses", "party", "_uid", "tut", "mods", "future", "fallen", "shp", "smax", "down"]
 
 var meta := {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
+## The Dread modifiers this run was started with (ids from Data.MODS).
+var mods := []
 ## Skips animation waits and saving. The headless tests turn this on.
 var fast := false
 ## Keeps animations but never writes saves. The screenshot scene turns this on.
@@ -33,6 +39,11 @@ var hours := 3
 var gold := 0
 var mhp := 0
 var mmax := 0
+## The Dark Lord's Squire: his HP between nights. Only used when the monster has a partner.
+var shp := 0
+var smax := 0
+## Duo members who fell and have not been bought back yet: "lord" and/or "squire".
+var down := []
 var souls := 0
 var kills := 0
 var logs := []
@@ -50,14 +61,26 @@ var bosses := 0              # boss nights survived; each one allows one more fl
 var links := {}              # Vector2i -> Vector2i, the stairs between floors
 var stairs_shut := 0         # turns left with every staircase collapsed
 var party := []
+var future := []     # the raiders of the next nights, so the Scrying Pool can show them
+var fallen := []     # kinds of the minions that died last night, for the Stitching Room
 var sel := -1
 var sel_minion = null
 var trap_mode := ""
 var ent_mode := false
 var _uid := 0
+## The tutorial step this run is on, or -1 for a normal run. Saved with the run.
+var tut := -1
+## Set by the tutorial: decides whether an action like "build:7:barracks" may happen now.
+## Empty means everything is allowed.
+var gate := Callable()
 
 
 func _ready() -> void:
+	# exports tagged "playtest" (the Windows preset) save apart from the editor, so a playtest
+	# copy always starts fresh with 0 souls, even on the developer's own machine
+	if OS.has_feature("playtest"):
+		meta_path = "user://playtest_meta.json"
+		run_path = "user://playtest_run.save"
 	load_meta()
 
 
@@ -69,9 +92,9 @@ func next_id() -> int:
 # ---------------------------------------------------------------- meta progression
 
 func load_meta() -> void:
-	if not FileAccess.file_exists(META_PATH):
+	if not FileAccess.file_exists(meta_path):
 		return
-	var f := FileAccess.open(META_PATH, FileAccess.READ)
+	var f := FileAccess.open(meta_path, FileAccess.READ)
 	var d = JSON.parse_string(f.get_as_text())
 	if d is Dictionary:
 		for k in d:
@@ -81,7 +104,7 @@ func load_meta() -> void:
 func save_meta() -> void:
 	if fast or no_save:
 		return   # tests must never touch the player's save
-	var f := FileAccess.open(META_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(meta_path, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(meta))
 
@@ -126,6 +149,12 @@ func load_run() -> bool:
 	var d := _read_run()
 	if d.is_empty():
 		return false
+	mods = []        # keys an older save may lack
+	future = []
+	fallen = []
+	shp = 0
+	smax = 0
+	down = []
 	for k in RUN_KEYS:
 		if d.has(k):
 			set(k, d[k])
@@ -147,19 +176,25 @@ func clear_run() -> void:
 
 # ---------------------------------------------------------------- run setup
 
-func new_run(key: String) -> void:
+func new_run(key: String, with_mods := []) -> void:
 	mk = key
 	M = Data.MONSTERS[key]
+	mods = with_mods.duplicate()
 	day = 1
-	hours = 3
 	gold = 70 + meta.hoard * 20
-	mhp = M.hp
-	mmax = M.hp
+	mmax = roundi(M.hp * 0.75) if has_mod("glass") else M.hp
+	mhp = mmax
+	smax = 0
+	if duo():
+		smax = roundi(M.partner.hp * 0.75) if has_mod("glass") else M.partner.hp
+	shp = smax
+	down = []
 	souls = 0
 	kills = 0
 	logs = []
 	taken = []
 	b = {"atk": 0, "spell": 0, "move": 0, "minion": 0, "feast": 0, "cd": 0, "greed": 0.0, "trap": 0, "hours": 0}
+	hours = day_hours()
 	slots = []
 	floors = 0
 	bosses = 0
@@ -176,9 +211,46 @@ func new_run(key: String) -> void:
 	sel_minion = null
 	trap_mode = ""
 	ent_mode = false
+	tut = -1
+	fallen = []
 	party = make_party(1)
+	future = [make_party(2), make_party(3)]
 	add_log("%s has claimed a damp cave. The village has noticed." % M.name, "info")
 	changed.emit()
+
+
+# ---------------------------------------------------------------- dread modifiers
+
+func has_mod(id: String) -> bool:
+	return id in mods
+
+func mods_unlocked() -> bool:
+	return meta.best >= MODS_UNLOCK_BEST
+
+## How much the run's banked souls are multiplied by, e.g. 1.35.
+static func soul_mult_of(ids: Array) -> float:
+	var m := 1.0
+	for o in Data.MODS:
+		if o.id in ids:
+			m += o.bonus
+	return m
+
+func soul_mult() -> float:
+	return soul_mult_of(mods)
+
+func boss_every() -> int:
+	return 4 if has_mod("crusade") else BOSS_EVERY
+
+func is_boss_night(d: int) -> bool:
+	return d % boss_every() == 0
+
+func day_hours() -> int:
+	return (2 if has_mod("short") else 3) + (b.hours if b.has("hours") else 0)
+
+## Gold a hero drops when killed, after Greed and Lean Coffers.
+func kill_gold(base: int) -> int:
+	var g := roundi(base * (1 + b.greed))
+	return maxi(1, g / 2) if has_mod("lean") else g
 
 
 func make_party(d: int) -> Array:
@@ -192,8 +264,9 @@ func make_party(d: int) -> Array:
 	var list := []
 	for i in size:
 		list.append(pool.pick_random())
-	if d % 5 == 0: list[0] = "paladin"
-	if d % 10 == 0 and list.size() > 1: list[1] = "paladin"
+	if is_boss_night(d): list[0] = "paladin"
+	if is_boss_night(d) and d % (boss_every() * 2) == 0 and list.size() > 1: list[1] = "paladin"
+	if has_mod("crowded"): list.append(pool.pick_random())
 	return list
 
 
@@ -376,6 +449,17 @@ func rebuild_objs() -> void:
 
 # ---------------------------------------------------------------- day actions
 
+## Whether the tutorial lets this action happen right now. Actions look like "dig:6",
+## "build:7:barracks", "upgrade:12", "recruit:goblin", "trap", "entrance", "lair", "demolish", "night".
+func allowed(act: String) -> bool:
+	return not gate.is_valid() or gate.call(act)
+
+func guard(act: String) -> bool:
+	if allowed(act):
+		return true
+	tip("Not yet. Follow the tutorial steps in the panel.", true)
+	return false
+
 func tip(msg: String, warn := false) -> void:
 	tipped.emit(msg, warn)
 
@@ -417,7 +501,7 @@ func _layout_changed() -> void:
 	changed.emit()
 
 func dig(si: int) -> void:
-	if not diggable(si) or not spend(dig_cost()):
+	if not diggable(si) or not guard("dig:%d" % si) or not spend(dig_cost()):
 		return
 	slots[si] = {"state": "dug"}
 	add_log("Your servants dig out a new chamber.")
@@ -460,16 +544,19 @@ func stairs_block(si: int) -> String:
 	if f < floors - 1:
 		return "This floor already has stairs up."
 	if floors >= 1 + bosses:
-		return "Your lair can't carry another floor yet. Survive a boss night (night %d) to build higher." % ((bosses + 1) * BOSS_EVERY)
+		return "Your lair can't carry another floor yet. Survive a boss night (night %d) to build higher." % ((bosses + 1) * boss_every())
 	return ""
 
 func build(si: int, t: String) -> void:
-	if slots[si].state != "dug" or not can_build(t, si) or not spend(Data.ROOMS[t].cost[0]):
+	if slots[si].state != "dug" or not can_build(t, si) or not guard("build:%d:%s" % [si, t]) or not spend(Data.ROOMS[t].cost[0]):
 		return
 	slots[si] = {"state": "built", "type": t, "lvl": 1}
 	if t == "coffin":
 		mmax += 8
 		mhp += 8
+	if t == "trainingyard":
+		smax += 4
+		shp += 4
 	if t == "stairs":
 		_add_floor()
 		slots[si + FLOOR_SLOTS] = {"state": "dug"}
@@ -481,18 +568,23 @@ func build(si: int, t: String) -> void:
 func upgrade(si: int) -> void:
 	var s: Dictionary = slots[si]
 	var R: Dictionary = Data.ROOMS[s.type]
-	if s.lvl >= R.cost.size() or not spend(R.cost[s.lvl]):
+	if s.lvl >= R.cost.size() or not guard("upgrade:%d" % si) or not spend(R.cost[s.lvl]):
 		return
 	s.lvl += 1
 	var hp := 6 if s.type == "lair" else (8 if s.type == "coffin" else 0)
 	mmax += hp
 	mhp += hp
+	# the lair strengthens both of a duo; the Training Yard only the Squire
+	var sq := (6 if s.type == "lair" else 0) + (4 if s.type == "trainingyard" else 0)
+	if duo() and sq > 0:
+		smax += sq
+		shp += sq
 	add_log("Your %s grows to level %d." % [R.name, s.lvl])
 	changed.emit()
 
 func demolish(si: int) -> void:
 	var s: Dictionary = slots[si]
-	if Data.ROOMS[s.type].get("fixed", false):
+	if Data.ROOMS[s.type].get("fixed", false) or not guard("demolish"):
 		return
 	if s.type == "stairs":
 		tip("The floor above stands on these stairs. They cannot come down.", true)
@@ -507,6 +599,9 @@ func demolish(si: int) -> void:
 	if s.type == "coffin":
 		mmax -= 8 * s.lvl
 		mhp = mini(mhp, mmax)
+	if s.type == "trainingyard":
+		smax -= 4 * s.lvl
+		shp = mini(shp, smax)
 	slots[si] = {"state": "dug"}
 	_layout_changed()
 
@@ -515,7 +610,7 @@ func lair_move_hours(si: int) -> int:
 	return 1 if floor_of_slot(si) == floor_of_slot(slot_idx("lair")) else 3
 
 func move_lair(si: int) -> void:
-	if slots[si].state != "dug" or not spend(0, lair_move_hours(si)):
+	if slots[si].state != "dug" or not guard("lair") or not spend(0, lair_move_hours(si)):
 		return
 	var old := slot_idx("lair")
 	var o: Dictionary = slots[old]
@@ -533,7 +628,7 @@ func move_entrance(p: Vector2i) -> void:
 		ent_mode = false
 		changed.emit()
 		return
-	if not spend(0):
+	if not guard("entrance") or not spend(0):
 		return
 	if traps.has(p):
 		gold += trap_cost(traps[p]) / 2
@@ -573,6 +668,8 @@ func trap_dmg(t: String) -> int:
 	return 6 + maxi(1, lvl("runes")) * 3 + cw
 
 func place_trap(p: Vector2i) -> void:
+	if not guard("trap"):
+		return
 	if traps.has(p):
 		gold += trap_cost(traps[p]) / 2
 		traps.erase(p)
@@ -625,8 +722,29 @@ func count_of(kind: String) -> int:
 func monster_start() -> Vector2i:
 	return slot_xy(slot_idx("lair")) * RS + Vector2i(2, 1)
 
+## The Squire starts on the rug just below the throne.
+func squire_start() -> Vector2i:
+	return monster_start() + Vector2i(0, 1)
+
+## True for monsters played as two units (the Dark Lord and his Squire).
+func duo() -> bool:
+	return M.has("partner")
+
+## Bring a fallen duo member back at full HP for souls from this run, one per night survived.
+func buy_back(who: String) -> void:
+	if not who in down or souls < day:
+		return
+	souls -= day
+	down.erase(who)
+	if who == "lord":
+		mhp = mmax
+	else:
+		shp = smax
+	add_log("You pay %d souls. %s rises again." % [day, M.name if who == "lord" else M.partner.name], "info")
+	changed.emit()
+
 func post_ok(p: Vector2i, skip = null) -> bool:
-	if not is_open(p) or p == entrance or p == monster_start():
+	if not is_open(p) or p == entrance or p == monster_start() or (duo() and p == squire_start()):
 		return false
 	for m in minions:
 		if m != skip and m.post == p:
@@ -654,6 +772,8 @@ func add_minion(kind: String, free := false) -> bool:
 	return true
 
 func recruit(kind: String) -> void:
+	if not guard("recruit:" + kind):
+		return
 	if count_of(kind) >= cap_of(kind):
 		tip("That room is full. Upgrade it to house more.", true)
 		return
@@ -722,6 +842,8 @@ func apply_boon(id: String) -> void:
 		"hide":
 			mmax += 6
 			mhp = mini(mmax, mhp + 6)
+			smax += 6 if duo() else 0
+			shp = mini(smax, shp + 6)
 		"claws": b.atk += 2
 		"surge": b.spell += 2
 		"swift": b.move += 1
@@ -742,7 +864,7 @@ func boon_choices() -> Array:
 	return avail.slice(0, 3)
 
 func dawn(boon: Dictionary) -> void:
-	if day % BOSS_EVERY == 0:
+	if is_boss_night(day):
 		bosses += 1
 		add_log("The earth trembles after the boss falls. You can dig a staircase to a new floor.", "info")
 	day += 1
@@ -751,18 +873,41 @@ func dawn(boon: Dictionary) -> void:
 		taken.append(boon.name)
 	var tg: int = [0, 12, 20, 30][lvl("treasury")]
 	var heal: int = [0, 6, 10, 15][lvl("larder")]
-	gold += tg + 10
+	var tribute := 5 if has_mod("lean") else 10
+	if has_mod("norest"):
+		heal = 0
+	gold += tg + tribute
 	mhp = mini(mmax, mhp + heal)
-	hours = 3 + b.hours
-	party = make_party(day)
-	add_log("Dawn of day %d. Terrified villagers leave 10 gold at the cave mouth.%s%s" % [day,
+	shp = mini(smax, shp + heal)
+	hours = day_hours()
+	party = future.pop_front() if future.size() > 0 else make_party(day)
+	while future.size() < 2:
+		future.append(make_party(day + future.size() + 1))
+	_stitch()
+	add_log("Dawn of day %d. Terrified villagers leave %d gold at the cave mouth.%s%s" % [day, tribute,
 		(" Treasury: +%d gold." % tg) if tg > 0 else "", (" Larder: +%d HP." % heal) if heal > 0 else ""], "info")
 	changed.emit()
 
+## Stitching Room: brings back minions lost last night for half their cost, if there is room.
+func _stitch() -> void:
+	var n := lvl("stitching")
+	var lost := fallen
+	fallen = []
+	for kind in lost:
+		if n <= 0:
+			break
+		var c: int = Data.UNITS[kind].cost / 2
+		if gold >= c and count_of(kind) < cap_of(kind) and add_minion(kind):
+			gold -= c
+			n -= 1
+			add_log("Your stitchers sew a %s back together for %d gold." % [Data.UNITS[kind].name.to_lower(), c], "info")
+
 func end_run() -> int:
-	var earned := souls + day * 2
+	var earned := roundi((souls + day * 2) * soul_mult())
 	meta.souls += earned
 	meta.best = maxi(meta.best, day - 1)
+	if not mods.is_empty():
+		meta.best_dread = maxi(meta.get("best_dread", 0), day - 1)
 	save_meta()
 	clear_run()
 	return earned

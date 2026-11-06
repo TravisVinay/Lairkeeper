@@ -36,9 +36,15 @@ class Unit:
 	var stole := 0
 	var escaped := false
 	var mid := -1
+	var dazed := false      # lost in a level 2 Maze of Bones: no attack this turn
+	var hex := 0            # turns left under the Dark Lord's Hex
+	var shield := 0         # damage a Dark Ward will still soak
+	var taunt: Unit = null  # Challenged: must go for this unit on its next turn
+	var rally := false      # Rallied by the Squire this turn
 
 var units: Array = []
 var mon: Unit
+var squire: Unit = null    # the Dark Lord's partner, when the monster is a duo
 var corpses := {}
 var sel: Unit = null
 var mode := ""
@@ -84,12 +90,13 @@ func say(msg: String, warn := false) -> void:
 func mk_unit(side: String, kind: String, p: Vector2i) -> Unit:
 	var u := Unit.new()
 	var is_mon := kind == "monster"
-	var D: Dictionary = Game.M if is_mon else Data.UNITS[kind]
+	var is_sq := kind == "squire"
+	var D: Dictionary = Game.M if is_mon else (Game.M.partner if is_sq else Data.UNITS[kind])
 	u.id = Game.next_id()
 	u.side = side
 	u.kind = kind
 	u.d = D
-	u.uname = Game.M.name if is_mon else (Data.NAMES[kind].pick_random() if side == "h" else D.name)
+	u.uname = Game.M.name if is_mon else D.name if is_sq else (Data.NAMES[kind].pick_random() if side == "h" else D.name)
 	u.pos = p
 	u.draw_pos = Vector2(p)
 	u.move = D.move
@@ -99,10 +106,13 @@ func mk_unit(side: String, kind: String, p: Vector2i) -> Unit:
 	if is_mon:
 		u.hp = Game.mhp
 		u.max_hp = Game.mmax
+	elif is_sq:
+		u.hp = Game.shp
+		u.max_hp = Game.smax
 	elif side == "h":
-		u.max_hp = roundi(D.hp * (1 + 0.14 * (Game.day - 1)))
+		u.max_hp = roundi(D.hp * (1 + 0.14 * (Game.day - 1)) * (1.25 if Game.has_mod("zealous") else 1.0))
 		u.hp = u.max_hp
-		u.atk += (Game.day - 1) / 3
+		u.atk += (Game.day - 1) / 3 + (1 if Game.has_mod("hardened") else 0)
 	else:
 		u.max_hp = D.hp
 		if D.get("undead", false) and Game.mk == "necro":
@@ -121,6 +131,12 @@ func start() -> void:
 	queue = Game.party.duplicate()
 	Game.stairs_shut = 0
 	mon = mk_unit("p", "monster", Game.monster_start())
+	if Game.duo():
+		squire = mk_unit("p", "squire", Game.squire_start())
+		if "squire" in Game.down:
+			squire.hp = 0
+		if "lord" in Game.down:
+			mon.hp = 0
 	for m in Game.minions:
 		var u := mk_unit("p", m.kind, m.post)
 		u.mid = m.mid
@@ -163,10 +179,28 @@ func unit_at(p: Vector2i) -> Unit:
 func empty_tile(p: Vector2i) -> bool:
 	return Game.is_open(p) and unit_at(p) == null
 
+## The monster and, for a duo, the Squire: the units the run is lost without.
+func is_mon(u: Unit) -> bool:
+	return u.kind == "monster" or u.kind == "squire"
+
+func mons_alive() -> Array:
+	return units.filter(func(u): return u.hp > 0 and is_mon(u))
+
+## The monster unit to select or follow first: the Dark Lord, or his Squire if he is down.
+func lead() -> Unit:
+	var a := mons_alive()
+	return a[0] if a.size() > 0 else mon
+
+## The Dark Lord and his Squire are bonded while they stand close together.
+func bonded() -> bool:
+	if squire == null or mon.hp <= 0 or squire.hp <= 0:
+		return false
+	return Game.man(mon.pos, squire.pos) <= (5 if Game.lvl("oathstone") > 0 else 3)
+
 func move_of(u: Unit) -> int:
 	if u.root > 0:
 		return 0
-	var m: int = u.move + (Game.b.move if u.kind == "monster" else 0)
+	var m: int = u.move + (Game.b.move if is_mon(u) else 0) + (1 if u.rally else 0)
 	if u.side == "h" and Game.type_at(u.pos) == "cistern":
 		m = maxi(1, m - Game.lvl("cistern"))
 	if u.slow > 0:
@@ -174,11 +208,14 @@ func move_of(u: Unit) -> int:
 	return m
 
 func atk_of(u: Unit) -> int:
+	var bond := 1 if bonded() and is_mon(u) else 0
 	if u.kind == "monster":
-		return u.atk + Game.b.atk + Game.lvl("bloodpool") * 2 + Game.lvl("brainjars") * 2
+		return u.atk + Game.b.atk + Game.lvl("bloodpool") * 2 + Game.lvl("brainjars") * 2 + Game.lvl("sanctum") + bond
+	if u.kind == "squire":
+		return u.atk + Game.b.atk + bond
 	if u.side == "p":
-		return u.atk + Game.b.minion + Game.lvl("armory")
-	return u.atk
+		return u.atk + Game.b.minion + Game.lvl("armory") + (2 if u.rally else 0)
+	return maxi(1, u.atk - (2 if u.hex > 0 else 0))
 
 func spell_dmg(base: int) -> int:
 	return base + Game.b.spell + Game.lvl("library") * 2
@@ -187,10 +224,15 @@ func cd_of(sp: Dictionary) -> int:
 	var c: int = sp.cd - Game.b.cd - Game.lvl("manawell")
 	if sp.id == "raise" and Game.lvl("soulcage") > 0: c -= 1
 	if sp.id == "dominate" and Game.lvl("amplifier") > 0: c -= 1
+	if bonded() and caster_of(sp) == mon: c -= 1
 	return maxi(1, c)
 
+## Rogues and Sappers see traps and walk around them; with Sharp Eyes every hero does.
+func spots_traps(u: Unit) -> bool:
+	return u.side == "h" and (u.d.get("sense", false) or Game.has_mod("sharp"))
+
 func is_unholy(u: Unit) -> bool:
-	if u.kind == "monster":
+	if is_mon(u):
 		return Game.mk in ["vampire", "lich", "necro"]
 	return u.d.get("undead", false)
 
@@ -239,7 +281,7 @@ func targets_for(u: Unit) -> Array:
 
 func threat_of(u: Unit) -> Dictionary:
 	var T := {}
-	var R := reach_of(u, u.d.get("sense", false))
+	var R := reach_of(u, spots_traps(u))
 	for v in R:
 		if R[v].occ:
 			continue
@@ -255,9 +297,15 @@ func threat_of(u: Unit) -> Dictionary:
 
 func walk(u: Unit, path: Array) -> void:
 	for st in path:
+		var from := u.pos
 		u.pos = st
 		await wait(0.085)
 		if u.side == "h" and await spring_trap(u):
+			return
+		# heroes who wander into the Maze of Bones lose their way and stop
+		if u.side == "h" and Game.type_at(st) == "maze" and Game.type_at(from) != "maze":
+			text(st, "lost!", Data.col("#e8dcc0"))
+			u.dazed = Game.lvl("maze") >= 2
 			return
 
 func spring_trap(u: Unit) -> bool:
@@ -299,7 +347,9 @@ func start_player_turn(first := false) -> void:
 					u.cds[k] -= 1
 	busy = false
 	mode = ""
-	select(mon)
+	for u in units:
+		u.rally = false
+	select(lead())
 	if first:
 		say("The first heroes are through the gate. Move, attack, or wait for them to come to you.")
 	elif queue.size() > 0:
@@ -355,11 +405,12 @@ func handle_click(p: Vector2i) -> void:
 		s.moved = true
 		busy = false
 		focus.emit(s.pos)
-		if targets_for(s).is_empty() and s.kind != "monster":
-			s.acted = true
+		# the unit stays selected until it attacks or you finish it, so a stray click can't end it
 		after_action()
 		return
-	select(null)
+	# a click on nothing useful keeps the current unit selected instead of dropping it
+	if s and not (s.moved and s.acted):
+		say("%s is still selected. Click a blue tile, a hero ringed in red, or Finish this unit (F)." % s.uname)
 
 ## Ends one unit's turn without it doing anything more.
 func finish_unit(u: Unit) -> void:
@@ -388,7 +439,7 @@ func after_action() -> void:
 func check_end() -> bool:
 	if over:
 		return true
-	if mon.hp <= 0:
+	if mons_alive().is_empty():
 		over = true
 		_finish(false)
 		return true
@@ -406,13 +457,30 @@ func _finish(won: bool) -> void:
 # ---------------------------------------------------------------- spells
 
 func spell(id: String) -> Dictionary:
-	for sp in Game.M.specials:
+	for sp in all_specials():
 		if sp.id == id:
 			return sp
 	return {}
 
+## Every spell this run's monster side has: the monster's, plus the Squire's for a duo.
+func all_specials() -> Array:
+	return Game.M.specials + (Game.M.partner.specials if Game.duo() else [])
+
+## The spells a unit casts. Minions have none.
+func specials_of(u: Unit) -> Array:
+	if u == null:
+		return []
+	if u.kind == "monster":
+		return Game.M.specials
+	if u.kind == "squire":
+		return Game.M.partner.specials
+	return []
+
+func caster_of(sp: Dictionary) -> Unit:
+	return squire if squire != null and sp in Game.M.partner.specials else mon
+
 func spell_tiles(sp: Dictionary) -> Array:
-	var m := mon
+	var m := caster_of(sp)
 	var o := []
 	var r: int = sp.get("range", 0)
 	match sp.kind:
@@ -420,6 +488,10 @@ func spell_tiles(sp: Dictionary) -> Array:
 			for h in alive("h"):
 				if Game.in_range(m.pos, h.pos, r) and not (sp.id == "dominate" and h.d.get("boss", false) and Game.lvl("amplifier") < 2):
 					o.append(h.pos)
+		"ally":
+			for u in alive("p"):
+				if u != m and u.kind != "monster" and Game.in_range(m.pos, u.pos, r):
+					o.append(u.pos)
 		"adj":
 			for dv in Game.DIRS:
 				var p: Vector2i = m.pos + dv
@@ -443,7 +515,8 @@ func spell_tiles(sp: Dictionary) -> Array:
 	return o
 
 func can_cast(sp: Dictionary) -> bool:
-	return not busy and not mon.acted and mon.cds.get(sp.id, 0) <= 0
+	var c := caster_of(sp)
+	return not busy and c != null and c.hp > 0 and not c.acted and c.cds.get(sp.id, 0) <= 0
 
 func arm_spell(id: String) -> void:
 	var sp := spell(id)
@@ -453,9 +526,10 @@ func arm_spell(id: String) -> void:
 		mode = ""
 		changed.emit()
 		return
-	select(mon)
+	var c := caster_of(sp)
+	select(c)
 	if sp.kind == "self":
-		await cast_spell(sp, mon.pos)
+		await cast_spell(sp, c.pos)
 		return
 	if spell_tiles(sp).is_empty():
 		say("No valid target for %s right now." % sp.name, true)
@@ -466,7 +540,7 @@ func arm_spell(id: String) -> void:
 	changed.emit()
 
 func cast_spell(sp: Dictionary, p: Vector2i) -> void:
-	var m := mon
+	var m := caster_of(sp)
 	if sp.kind != "self" and not (p in spell_tiles(sp)):
 		say("Pick one of the highlighted tiles.", true)
 		return
@@ -594,6 +668,32 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 					await walk(h, [nx])
 					if h.root > 0:
 						break
+		"hex":
+			var h := unit_at(p)
+			h.hex = 2
+			if Game.lvl("sanctum") >= 3:
+				h.slow = 1
+			line(m.pos, p, Data.col("#7d8cff"), true)
+			text(p, "hexed", Data.col("#a8b4ff"))
+		"ward":
+			var u := unit_at(p)
+			u.shield = 6
+			ring(p, Data.col("#7d8cff"), 1.0)
+			text(p, "warded", Data.col("#a8b4ff"))
+		"challenge":
+			var r: int = 3 if Game.lvl("trainingyard") >= 2 else 2
+			ring(m.pos, Data.col("#a8aec8"), float(r) + 0.5)
+			for h in alive("h"):
+				if Game.man(h.pos, m.pos) <= r:
+					h.taunt = m
+					text(h.pos, "challenged", Data.col("#d0d4e8"))
+			Game.add_log("%s bangs his blade on his shield. Come and get me." % m.uname)
+		"rally":
+			ring(m.pos, Data.col("#e4a648"), 3.5)
+			for u in alive("p"):
+				if not is_mon(u) and Game.man(u.pos, m.pos) <= 3:
+					u.rally = true
+					text(u.pos, "rallied", Data.col("#ffd070"))
 		"snap":
 			Game.traps[p] = "spikes"
 			burst(p, Data.col("#e8dcc0"), 10)
@@ -638,7 +738,7 @@ func collapse() -> void:
 # ---------------------------------------------------------------- combat
 
 func _reward(h: Unit) -> void:
-	var g := roundi(h.d.gold * (1 + Game.b.greed))
+	var g := Game.kill_gold(h.d.gold)
 	loot += g
 	kills += 1
 	Game.kills += 1
@@ -649,11 +749,25 @@ func hurt(t: Unit, amt: int, src: Unit, magic := false) -> void:
 	if t.hp <= 0:
 		return
 	var a := amt
-	if src and src.d.get("holy", false) and is_unholy(t):
+	if src and src.d.get("holy", false) and is_unholy(t) and Game.type_at(src.pos) != "shrine":
 		a += 3
-	var home := 1 if t.kind == "monster" and Game.type_at(t.pos) == "lair" else 0
+	if t.hex > 0:
+		a += 2 + Game.lvl("sanctum")
+	var home := 1 if is_mon(t) and Game.type_at(t.pos) == "lair" else 0
 	a = maxi(1, a - (0 if magic else t.armor) - home)
+	if t.shield > 0:
+		var soak := mini(t.shield, a)
+		t.shield -= soak
+		a -= soak
+		text(t.pos + Vector2i(0, -1), "warded", Data.col("#a8b4ff"))
+		if a <= 0:
+			changed.emit()
+			return
 	t.hp -= a
+	# Oath Stone level 2: a blow to one of the bonded pair heals the other
+	if is_mon(t) and Game.lvl("oathstone") >= 2 and bonded():
+		var other: Unit = squire if t == mon else mon
+		other.hp = mini(other.max_hp, other.hp + 1)
 	t.flash = 0.15
 	text(t.pos, "-%d" % a, Data.col("#ffd0c0") if t.side == "h" else Data.col("#ff7d8f"))
 	if src and src.hp > 0 and t.side != src.side and ((src.kind == "monster" and Game.mk == "vampire") or src.d.get("leech", false)):
@@ -691,27 +805,30 @@ func hurt(t: Unit, amt: int, src: Unit, magic := false) -> void:
 		var by := "your traps"
 		if src == null or src == TRAP: by = "your traps"
 		elif src.kind == "monster": by = "you"
+		elif src.kind == "squire": by = "your Squire"
 		elif src.side == "h": by = "a confused ally"
 		else: by = "your " + ("thrall" if src.thrall else src.d.name.to_lower())
 		Game.add_log("%s the %s was slain by %s." % [t.uname, t.d.name, by], "kill")
-		if src and src.kind == "monster" and Game.b.feast > 0:
+		if src and is_mon(src) and Game.b.feast > 0:
 			src.hp = mini(src.max_hp, src.hp + Game.b.feast)
 			text(src.pos, "+%d" % Game.b.feast, Data.col("#9be27a"))
 		Platform.on_hero_slain(t.kind)
-	elif t.kind == "monster":
+	elif is_mon(t) and mons_alive().size() > 0:
+		Game.add_log("%s falls! %s fights on alone." % [t.uname, mons_alive()[0].uname], "bad")
+	elif is_mon(t):
 		Game.add_log("You fall.", "bad")
 	else:
 		Game.add_log("Your %s is cut down. It will not come back." % (("thrall " + t.uname) if t.thrall else t.d.name.to_lower()), "bad")
 	changed.emit()
 
 func attack(a: Unit, t: Unit) -> void:
-	var c := Data.col(Game.M.col) if a.kind == "monster" else (Data.col("#d8f0a0") if a.side == "p" else (Data.col("#ff9a40") if a.d.get("splash", false) else Color.WHITE))
+	var c := Data.col(Game.M.col) if a.kind == "monster" else Data.col(Game.M.partner.col) if a.kind == "squire" else (Data.col("#d8f0a0") if a.side == "p" else (Data.col("#ff9a40") if a.d.get("splash", false) else Color.WHITE))
 	line(a.pos, t.pos, c, a.rng > 1)
 	a.lunge = Vector2(t.pos - a.pos) * 0.25
 	a.lunge_t = 0.15
 	await wait(0.11)
 	var dmg := atk_of(a)
-	hurt(t, dmg, a)
+	hurt(t, dmg, a, a.kind == "monster" and Game.mk == "darklord")   # Doombolt ignores armor
 	if a.d.get("splash", false):
 		ring(t.pos, Data.col("#ff9a40"), 1.2)
 		for o in units.duplicate():
@@ -731,7 +848,7 @@ func enemy_turn() -> void:
 	mode = ""
 	say("")
 	changed.emit()
-	var Fm := Game.field([mon.pos])
+	var Fm := Game.field(mons_alive().map(func(u): return u.pos))
 	var heroes := alive("h")
 	heroes.sort_custom(func(a, c): return Fm.get(a.pos, 99) < Fm.get(c.pos, 99))
 	for h in heroes:
@@ -745,6 +862,7 @@ func enemy_turn() -> void:
 	for h in alive("h"):
 		if h.slow > 0: h.slow -= 1
 		if h.conf > 0: h.conf -= 1
+		if h.hex > 0: h.hex -= 1
 	if Game.stairs_shut > 0:
 		Game.stairs_shut -= 1
 		if Game.stairs_shut == 0:
@@ -779,6 +897,11 @@ func hero_turn(h: Unit) -> void:
 		hurt(h, 2 + Game.lvl("torture"), TRAP, true)
 		if h.hp <= 0:
 			return
+	if Game.type_at(h.pos) == "shrine" and D.get("holy", false):
+		text(h.pos, "desecrated", Data.col("#b08ad0"))
+		hurt(h, Game.lvl("shrine"), TRAP, true)
+		if h.hp <= 0:
+			return
 	if h.stun > 0:
 		h.stun -= 1
 		text(h.pos, "...", Data.col("#ff9ab0"))
@@ -797,10 +920,11 @@ func hero_turn(h: Unit) -> void:
 			if Game.in_range(h.pos, foe.pos, h.rng):
 				await attack(h, foe)
 			return
-	if D.get("heal", 0) > 0:
+	# clerics can't heal anyone inside the Shrine of Desecration, or while standing in it
+	if D.get("heal", 0) > 0 and Game.type_at(h.pos) != "shrine":
 		var hurt_ally: Unit = null
 		for o in alive("h"):
-			if o != h and o.hp < o.max_hp and (hurt_ally == null or float(o.hp) / o.max_hp < float(hurt_ally.hp) / hurt_ally.max_hp):
+			if o != h and o.hp < o.max_hp and Game.type_at(o.pos) != "shrine" and (hurt_ally == null or float(o.hp) / o.max_hp < float(hurt_ally.hp) / hurt_ally.max_hp):
 				hurt_ally = o
 		if hurt_ally and Game.man(h.pos, hurt_ally.pos) <= move_of(h) + 3:
 			await approach(h, Game.field([hurt_ally.pos]), hurt_ally, 3)
@@ -847,7 +971,10 @@ func hero_turn(h: Unit) -> void:
 		return
 	var Fh := Game.field([h.pos])
 	var target: Unit
-	if D.get("sense", false) and not D.get("disarm", false):
+	if h.taunt != null and h.taunt.hp > 0:
+		target = h.taunt
+		h.taunt = null
+	elif D.get("sense", false) and not D.get("disarm", false):
 		ps.sort_custom(func(a, c): return a.hp < c.hp or (a.hp == c.hp and Fh.get(a.pos, 99) < Fh.get(c.pos, 99)))
 		target = ps[0]
 	elif Game.mk == "mimic":
@@ -857,6 +984,9 @@ func hero_turn(h: Unit) -> void:
 		target = ps[0]
 	await approach(h, Game.field([target.pos]), target, h.rng)
 	if h.hp <= 0:
+		return
+	if h.dazed:
+		h.dazed = false
 		return
 	var t: Unit = target if Game.in_range(h.pos, target.pos, h.rng) else null
 	if t == null:
@@ -868,12 +998,14 @@ func hero_turn(h: Unit) -> void:
 		await attack(h, t)
 		if t.kind == "monster":
 			Game.mhp = t.hp
+		elif t.kind == "squire":
+			Game.shp = t.hp
 
 ## Sort order for hero targets: nearest by walking distance, ties go to the monster.
 func _closer(a: Unit, c: Unit, F: Dictionary) -> bool:
 	var da: int = F.get(a.pos, 99)
 	var dc: int = F.get(c.pos, 99)
-	return da < dc or (da == dc and a.kind == "monster" and c.kind != "monster")
+	return da < dc or (da == dc and is_mon(a) and not is_mon(c))
 
 func strike_nearby(h: Unit) -> void:
 	for p in alive("p"):
@@ -899,9 +1031,9 @@ func _best_step(h: Unit, F: Dictionary, target: Unit, r: int, avoid: bool) -> Di
 	return {"R": R, "best": best, "bs": bs}
 
 func approach(h: Unit, F: Dictionary, target: Unit, r: int) -> void:
-	var res := _best_step(h, F, target, r, h.d.get("sense", false))
+	var res := _best_step(h, F, target, r, spots_traps(h))
 	# trap-wary heroes walk over traps when there is no other way forward
-	if h.d.get("sense", false) and res.best == h.pos and res.bs < 1000 and F.get(res.best, 999) > 0:
+	if spots_traps(h) and res.best == h.pos and res.bs < 1000 and F.get(res.best, 999) > 0:
 		res = _best_step(h, F, target, r, false)
 	if res.best != null and res.best != h.pos:
 		await walk(h, path_to(res.R, res.best))
@@ -911,7 +1043,13 @@ func approach(h: Unit, F: Dictionary, target: Unit, r: int) -> void:
 
 ## Applies a won night to the run and returns a summary for the boon screen.
 func resolve_win() -> Dictionary:
-	Game.mhp = maxi(1, mon.hp)
+	# a fallen duo member stays down until bought back with souls
+	Game.mhp = maxi(1, mon.hp) if mon.hp > 0 or squire == null else 0
+	if squire != null:
+		Game.shp = squire.hp
+		for e in [["lord", mon], ["squire", squire]]:
+			if e[1].hp <= 0 and not e[0] in Game.down:
+				Game.down.append(e[0])
 	Game.gold += loot
 	Game.stairs_shut = 0
 	var lost := []
@@ -924,6 +1062,8 @@ func resolve_win() -> Dictionary:
 			lost.append(m)
 	for m in lost:
 		Game.minions.erase(m)
+		if not m.free:
+			Game.fallen.append(m.kind)
 	Game.meta.best = maxi(Game.meta.best, Game.day)
 	Game.save_meta()
 	Game.add_log("Night %d survived. You loot %d gold.%s%s" % [Game.day, loot,

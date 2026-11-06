@@ -15,6 +15,7 @@ var tgt := cam
 var tgt_z := cam_z
 var hover := Vector2i(-99, -99)
 var shown_floor := 0             # the floor being shown
+var hint_slot := -1              # a chamber the tutorial is pointing at, or -1
 var now := 0.0
 var font: Font
 var _press = null
@@ -320,6 +321,13 @@ func _draw() -> void:
 		draw_rect(Rect2(at, Vector2(ts.x + pad * 2.0, ts.y + pad * 0.6)), Color(0.05, 0.04, 0.06, 0.45 if battle else 0.72))
 		draw_string(font, at + Vector2(pad, pad * 0.3 + font.get_ascent(fs)), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
+	# the tutorial's pulsing pointer at the chamber to click next
+	if hint_slot >= 0 and Game.floor_of_slot(hint_slot) == shown_floor and battle == null:
+		var hr := Rect2(Vector2(Game.slot_xy(hint_slot) * Game.RS) * T, Vector2(Game.RS, Game.RS) * T)
+		var pulse := 0.5 + 0.5 * sin(now * 4.0)
+		draw_rect(hr, Data.col("#e4a648", 0.06 + 0.08 * pulse))
+		draw_rect(hr.grow(-4), Data.col("#e4a648", 0.55 + 0.45 * pulse), false, 6.0 + 4.0 * pulse)
+
 	if battle:
 		for k in battle.corpses:
 			if here(k) and battle.unit_at(k) == null:
@@ -329,6 +337,11 @@ func _draw() -> void:
 		if battle.sel and not battle.busy and battle.mode == "":
 			for h in battle.targets_for(battle.sel):
 				draw_arc((h.draw_pos + Vector2(0.5, 0.5)) * T, T * 0.46, 0, TAU, 28, Data.col("#ff5d6a"), 3.0, true)
+		# the bond between the Dark Lord and his Squire
+		if battle.bonded() and here(battle.mon.pos) and here(battle.squire.pos):
+			var a := (battle.mon.draw_pos + Vector2(0.5, 0.5)) * T
+			var z := (battle.squire.draw_pos + Vector2(0.5, 0.5)) * T
+			draw_line(a, z, Data.col("#b89cff", 0.35 + 0.15 * sin(now * 3.0)), 3.0, true)
 		for u in battle.units:
 			if u.hp > 0 and here(u.pos):
 				_draw_unit(xf, u.kind, u.d, u.draw_pos + u.lunge, u.side, u.hp, u.max_hp, u.id, u.flash > 0.0,
@@ -357,8 +370,10 @@ func _draw() -> void:
 			draw_string(font, at, t.s, HORIZONTAL_ALIGNMENT_CENTER, 220, 22, c)
 	else:
 		var ms := Game.monster_start()
-		if here(ms):
+		if here(ms) and not "lord" in Game.down:
 			_draw_unit(xf, "monster", Game.M, Vector2(ms), "p", Game.mhp, Game.mmax, 0, false, false, false, false, false, false, false, false, false, false)
+		if Game.duo() and here(Game.squire_start()) and not "squire" in Game.down:
+			_draw_unit(xf, "squire", Game.M.partner, Vector2(Game.squire_start()), "p", Game.shp, Game.smax, 1, false, false, false, false, false, false, false, false, false, false)
 		for m in Game.minions:
 			if not here(m.post):
 				continue
@@ -430,7 +445,7 @@ func _draw_unit(xf: Transform2D, kind: String, D: Dictionary, at: Vector2, side:
 		fl: bool, selected: bool, done: bool, slow: bool, root: bool, dashed: bool, flee: bool, stun: bool, thrall: bool, bar: bool) -> void:
 	var c := (at + Vector2(0.5, 0.5)) * T
 	draw_set_transform_matrix(xf * Transform2D(0.0, c))
-	var R := 22.0 if kind == "monster" else (21.0 if D.get("boss", false) else 15.0)
+	var R := 22.0 if kind == "monster" else (20.0 if kind == "squire" else (21.0 if D.get("boss", false) else 15.0))
 	var bob := sin(now * 3.0 + id) * 1.5
 	Sprites.ell(self, Vector2(0, R + 3), R * 0.9, 4, Color(0, 0, 0, 0.65))
 	if selected:
@@ -444,6 +459,8 @@ func _draw_unit(xf: Transform2D, kind: String, D: Dictionary, at: Vector2, side:
 		draw_circle(Vector2(-R + 2, R - 6), 6, Data.col("#e4a648"))
 	if kind == "monster":
 		Sprites.monster(self, Game.mk, Data.col(Game.M.col), R, bob, fl, now)
+	elif kind == "squire":
+		Sprites.monster(self, "squire", Data.col(D.col), R, bob, fl, now)
 	elif side == "h" or thrall:
 		Sprites.hero(self, kind, Data.col(D.get("col", "#cccccc")), R, bob, fl, now)
 	else:
@@ -455,5 +472,5 @@ func _draw_unit(xf: Transform2D, kind: String, D: Dictionary, at: Vector2, side:
 	if bar and battle:
 		var w := T * 0.78
 		draw_rect(Rect2(-w / 2, T * 0.38, w, 6), Color(0, 0, 0, 0.8))
-		var bc := Data.col("#ff5d74") if kind == "monster" else (Data.col("#c77dff") if thrall else (Data.col("#86b35e") if side == "p" else Data.col("#e0a050")))
+		var bc := Data.col("#ff5d74") if kind == "monster" or kind == "squire" else (Data.col("#c77dff") if thrall else (Data.col("#86b35e") if side == "p" else Data.col("#e0a050")))
 		draw_rect(Rect2(-w / 2, T * 0.38, w * float(hp) / max_hp, 6), bc)

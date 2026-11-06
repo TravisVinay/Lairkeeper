@@ -9,9 +9,11 @@ var title_scr: Control
 var catalog_ov: Control
 var settings_ov: Control
 var pause_ov: Control
+var stats_ov: Control
 var confirm_ov: Control
 
 var cont_btn: Button
+var tut_btn: Button
 var footer: Label
 var _back: Callable            # where Back goes from the catalog and settings
 var _cat_tab := ""             # "" for common rooms, otherwise a monster key
@@ -26,20 +28,21 @@ func build(main_ui) -> void:
 	catalog_ov = ui._overlay(self)
 	settings_ov = ui._overlay(self)
 	pause_ov = ui._overlay(self)
+	stats_ov = ui._overlay(self)
 	confirm_ov = ui._overlay(self)
 
 func apply_layout(vp: Vector2) -> void:
-	for e in [[catalog_ov, 1080.0], [settings_ov, 640.0], [pause_ov, 420.0], [confirm_ov, 520.0]]:
+	for e in [[catalog_ov, 1080.0], [stats_ov, 760.0], [settings_ov, 640.0], [pause_ov, 420.0], [confirm_ov, 520.0]]:
 		e[0].get_meta("card").custom_minimum_size.x = minf(e[1], vp.x - 40.0)
 		e[0].get_meta("center").custom_minimum_size = vp
 	if catalog_ov.visible:
 		render_catalog()
 
 func is_open() -> bool:
-	return title_scr.visible or catalog_ov.visible or settings_ov.visible or pause_ov.visible or confirm_ov.visible
+	return title_scr.visible or catalog_ov.visible or settings_ov.visible or pause_ov.visible or confirm_ov.visible or stats_ov.visible
 
 func hide_all() -> void:
-	for o in [title_scr, catalog_ov, settings_ov, pause_ov, confirm_ov]:
+	for o in [title_scr, catalog_ov, settings_ov, pause_ov, confirm_ov, stats_ov]:
 		o.visible = false
 
 func _box(o: Control) -> VBoxContainer:
@@ -109,6 +112,7 @@ func _title_screen() -> Control:
 	v.add_child(btns)
 	cont_btn = _menu_btn(btns, "Continue", func(): ui.continue_run(), "PrimaryButton")
 	_menu_btn(btns, "New run", _new_run)
+	tut_btn = _menu_btn(btns, "Tutorial", _tutorial)
 	_menu_btn(btns, "Room catalog", func(): open_catalog(show_title))
 	_menu_btn(btns, "Settings", func(): open_settings(show_title))
 	var ex := _menu_btn(btns, "Exit game", func(): get_tree().quit(), "GhostButton")
@@ -127,21 +131,34 @@ func show_title() -> void:
 	var s := Game.run_summary()
 	cont_btn.disabled = s.is_empty()
 	cont_btn.text = "Continue" if s.is_empty() else "Continue\n%s · night %d" % [Data.MONSTERS[s.mk].name, s.day]
+	var fresh: bool = not Game.meta.get("tutorial_done", 0) and Game.meta.best == 0
+	tut_btn.text = "Tutorial  ·  start here" if fresh else "Tutorial"
+	tut_btn.theme_type_variation = "PrimaryButton" if fresh and s.is_empty() else ""
 	footer.text = "Souls banked: %d   ·   Most nights survived: %d" % [Game.meta.souls, Game.meta.best]
 	title_scr.visible = true
 	if not cont_btn.disabled:
 		cont_btn.grab_focus()
+	elif fresh:
+		tut_btn.grab_focus()
 
 func _new_run() -> void:
+	_abandon_then("Start a new run", ui.show_start)
+
+## Five guided nights as the Vampire Lord, then the run carries on as normal.
+func _tutorial() -> void:
+	_abandon_then("Start the tutorial", ui.start_tutorial)
+
+## Runs then() at once, or after confirming when a saved run would be given up.
+func _abandon_then(yes: String, then: Callable) -> void:
 	var s := Game.run_summary()
 	if s.is_empty():
-		ui.show_start()
+		then.call()
 		return
 	confirm("Abandon your current run?",
 		"%s is about to face night %d. Starting over gives up that run, and it banks no souls." % [Data.MONSTERS[s.mk].name, s.day],
-		"Start a new run", func():
+		yes, func():
 			Game.clear_run()
-			ui.show_start())
+			then.call())
 
 
 # ---------------------------------------------------------------- room catalog
@@ -262,6 +279,98 @@ func _room_entry(t: String) -> Control:
 	return p
 
 
+# ---------------------------------------------------------------- your monster
+
+## A sheet with the monster's current numbers, after rooms, boons and Dread. For a duo,
+## one column per unit. Pass an empty Callable to just close it again.
+func open_stats(back: Callable) -> void:
+	if not ui.in_run:
+		return
+	hide_all()
+	_back = back
+	render_stats()
+	stats_ov.visible = true
+
+func render_stats() -> void:
+	var v := _box(stats_ov)
+	_header(v, "Your monster")
+	# at night read the live units; by day build throwaway ones so the numbers match a fight
+	var b: Battle = ui.battle
+	var temp := b == null
+	if temp:
+		b = Battle.new()
+		b.mon = b.mk_unit("p", "monster", Game.monster_start())
+		if Game.duo():
+			b.squire = b.mk_unit("p", "squire", Game.squire_start())
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	v.add_child(row)
+	for u in [b.mon, b.squire]:
+		if u != null:
+			var c := _unit_sheet(b, u)
+			c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(c)
+	if Game.duo():
+		v.add_child(ui.lbl("Bond: within %d tiles of each other, both deal +1 damage and the Dark Lord's spells recharge 1 turn faster." % (5 if Game.lvl("oathstone") > 0 else 3), 14, "#b89cff"))
+	v.add_child(ui.h3("Dark boons"))
+	v.add_child(ui.lbl(", ".join(Game.taken) if Game.taken.size() > 0 else "None yet. Survive a night to earn one.", 14, "#c9a7ff" if Game.taken.size() > 0 else "#a7998f"))
+	if Game.mods.size() > 0:
+		var names := []
+		for o in Data.MODS:
+			if o.id in Game.mods:
+				names.append(o.name)
+		v.add_child(ui.h3("Dread · souls ×%.2f" % Game.soul_mult()))
+		v.add_child(ui.lbl(", ".join(names), 14, "#c9a7ff"))
+	if temp:
+		b.free()
+
+## One unit's card: health, attack, defense, spells, and where its bonuses come from.
+func _unit_sheet(b: Battle, u) -> Control:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", ui._box("#1a1520", "#463a4e", 8, 14))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	p.add_child(v)
+	var D: Dictionary = u.d
+	var col: String = D.col
+	var down: bool = (u.kind == "monster" and "lord" in Game.down) or (u.kind == "squire" and "squire" in Game.down)
+	v.add_child(ui.lbl(("Fallen · " if down else "") + ("Your partner" if u.kind == "squire" else Game.M.role).to_upper(), 12, "#ff9a8a" if down else col))
+	v.add_child(ui.title(u.uname, col, 26))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 2)
+	v.add_child(grid)
+	var dmg: int = b.atk_of(u)
+	var magic: bool = Game.mk == "darklord" and u.kind == "monster"
+	for e in [["Health", "%d / %d" % [u.hp, u.max_hp]],
+			["Attack", "%s · %d damage%s" % [D.attack, dmg, " (ignores armor)" if magic else ""]],
+			["Range", "%d tile%s" % [u.rng, "" if u.rng == 1 else "s"]],
+			["Move", "%d tiles" % b.move_of(u)],
+			["Armor", "%d (blocks %d damage per hit)" % [u.armor, u.armor] if u.armor > 0 else "none"],
+			["In your lair", "takes 1 less damage"]]:
+		grid.add_child(ui.lbl(e[0], 14, "#a7998f", false))
+		var val: Label = ui.lbl(e[1], 15, "#ede3cd")
+		val.size_flags_horizontal = Control.SIZE_EXPAND_FILL   # wrapped text needs a width to wrap to
+		grid.add_child(val)
+	var extra: int = dmg - D.atk
+	if extra > 0:
+		var why := []
+		if Game.b.atk > 0: why.append("+%d from boons" % Game.b.atk)
+		var rooms: int = extra - Game.b.atk - (1 if b.bonded() else 0)
+		if rooms > 0: why.append("+%d from rooms" % rooms)
+		if b.bonded(): why.append("+1 from the bond")
+		v.add_child(ui.lbl("Base damage %d, %s." % [D.atk, ", ".join(why)], 13, "#a7998f"))
+	for sp in b.specials_of(u):
+		var s := VBoxContainer.new()
+		s.add_theme_constant_override("separation", 0)
+		var cd: int = b.cd_of(sp)
+		s.add_child(ui.lbl("%s  ·  recharges in %d turn%s%s" % [sp.name, cd, "" if cd == 1 else "s", " · free action" if sp.get("free", false) else ""], 14, col))
+		s.add_child(ui.lbl(sp.desc, 13, "#b3a59b"))
+		v.add_child(s)
+	return p
+
+
 # ---------------------------------------------------------------- settings
 
 func open_settings(back: Callable) -> void:
@@ -337,7 +446,14 @@ func render_pause() -> void:
 	var v := _box(pause_ov)
 	v.add_child(_centered(ui.title("Paused", "#e4a648", 36)))
 	v.add_child(_centered(ui.lbl("%s · %s %d" % [Game.M.name, "night" if ui.night else "day", Game.day], 15, "#a7998f", false)))
+	if Game.mods.size() > 0:
+		var names := []
+		for o in Data.MODS:
+			if o.id in Game.mods:
+				names.append(o.name)
+		v.add_child(_centered(ui.lbl("Dread: %s · souls ×%.2f" % [", ".join(names), Game.soul_mult()], 13, "#c9a7ff")))
 	var resume := _menu_btn(v, "Resume  (Esc)", func(): pause_ov.visible = false, "PrimaryButton")
+	_menu_btn(v, "Your monster", func(): open_stats(open_pause))
 	_menu_btn(v, "Room catalog", func(): open_catalog(open_pause))
 	_menu_btn(v, "Settings", func(): open_settings(open_pause))
 	var busy: bool = ui.battle != null and ui.battle.busy
@@ -383,6 +499,7 @@ func confirm(head: String, body: String, yes: String, cb: Callable) -> void:
 func go_back() -> void:
 	catalog_ov.visible = false
 	settings_ov.visible = false
+	stats_ov.visible = false
 	if _back.is_valid():
 		_back.call()
 
@@ -399,7 +516,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if confirm_ov.visible:
 		confirm_ov.visible = false
-	elif catalog_ov.visible or settings_ov.visible:
+	elif catalog_ov.visible or settings_ov.visible or stats_ov.visible:
 		go_back()
 	elif pause_ov.visible:
 		pause_ov.visible = false

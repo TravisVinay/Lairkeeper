@@ -19,12 +19,14 @@ var popup: PanelContainer      # the selected unit's card, docked beside the map
 var pop_box: VBoxContainer
 var idle: PanelContainer       # shown in the dock when nothing is selected
 var idle_lbl: Label
+var dock: Container            # the night column beside the map
 
 
 ## dock is the night column beside the map: the selected unit's card and room powers go there.
 func build(main_ui, board_node, dock: Container) -> void:
 	ui = main_ui
 	board = board_node
+	self.dock = dock
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
@@ -57,7 +59,7 @@ func build(main_ui, board_node, dock: Container) -> void:
 	fit_btn = Button.new()
 	fit_btn.text = "Whole map"
 	fit_btn.theme_type_variation = "GhostButton"
-	fit_btn.tooltip_text = "Drag or WASD / arrow keys to pan.\nEsc deselects. 1 and 2 cast your spells."
+	fit_btn.tooltip_text = "Drag or WASD / arrow keys to pan.\nEsc deselects. 1 and 2 cast spells. F finishes the selected unit."
 	fit_btn.pressed.connect(ui._toggle_fit)
 	tr.add_child(fit_btn)
 	end_btn = Button.new()
@@ -152,10 +154,16 @@ func _stats(u, hit: int) -> String:
 	return "HP %d/%d · Move %d · Hit %d · Range %d" % [u.hp, u.max_hp, battle.move_of(u), hit, u.rng]
 
 func _render_friend(u) -> void:
-	var who: String = "You" if u.kind == "monster" else ("Your thrall" if u.thrall else "Your minion")
+	var who: String = "You" if u.kind == "monster" else ("Your Squire" if u.kind == "squire" else ("Your thrall" if u.thrall else "Your minion"))
 	pop_box.add_child(ui.h3(who + (" · done" if u.acted and u.moved else "")))
-	pop_box.add_child(ui.title(u.uname, Game.M.col if u.kind == "monster" else "#ede3cd", 20))
+	var col: String = Game.M.col if u.kind == "monster" else (Game.M.partner.col if u.kind == "squire" else "#ede3cd")
+	pop_box.add_child(ui.title(u.uname, col, 20))
 	pop_box.add_child(ui.lbl(_stats(u, battle.atk_of(u)), 13))
+	if u.shield > 0 or u.rally:
+		pop_box.add_child(ui.lbl(("Warded: soaks %d damage. " % u.shield if u.shield > 0 else "") + ("Rallied: +1 move, +2 damage." if u.rally else ""), 12, "#a8b4ff"))
+	if battle.squire != null and battle.is_mon(u):
+		pop_box.add_child(ui.lbl("Bonded: both deal +1 damage, and the Dark Lord's spells recharge faster." if battle.bonded()
+			else "Not bonded. Stand within %d tiles of each other for +1 damage." % (5 if Game.lvl("oathstone") > 0 else 3), 12, "#b89cff" if battle.bonded() else "#8a7f90"))
 	if u.acted and u.moved:
 		pop_box.add_child(ui.lbl("Done for this turn.", 13, "#a7998f"))
 		return
@@ -163,15 +171,16 @@ func _render_friend(u) -> void:
 	if u.moved:
 		hint = "Moved. Attack a hero ringed in red, or finish this unit."
 	pop_box.add_child(ui.lbl(hint, 12, "#a7998f"))
-	if u.kind == "monster":
-		for si in Game.M.specials.size():
-			var sp: Dictionary = Game.M.specials[si]
+	var sps: Array = battle.specials_of(u)
+	if sps.size() > 0:
+		for si in sps.size():
+			var sp: Dictionary = sps[si]
 			var cd: int = u.cds.get(sp.id, 0)
 			var state := ("%d turn%s" % [cd, "s" if cd > 1 else ""]) if cd > 0 else ("cancel" if battle.mode == sp.id else "ready")
 			pop_box.add_child(ui.opt("%s  (%d)" % [sp.name, si + 1], state, sp.desc + ("" if sp.get("free", false) else " Uses your action."),
 				func(): battle.arm_spell(sp.id), not battle.can_cast(sp), battle.mode == sp.id))
 	var done := Button.new()
-	done.text = "Finish this unit"
+	done.text = "Finish this unit  (F)"
 	done.theme_type_variation = "GhostButton"
 	done.pressed.connect(func(): battle.finish_unit(u))
 	pop_box.add_child(done)
@@ -183,9 +192,11 @@ func _render_hero(h) -> void:
 	if h.root > 0: cond.append("snared")
 	if h.slow > 0: cond.append("slowed")
 	if h.flee: cond.append("fleeing with gold")
+	if h.hex > 0: cond.append("hexed")
+	if h.taunt != null: cond.append("challenged")
 	pop_box.add_child(ui.h3("Hero" + (" · " + ", ".join(cond) if cond.size() > 0 else "")))
 	pop_box.add_child(ui.title("%s the %s" % [h.uname, h.d.name], "#ede3cd", 20))
-	pop_box.add_child(ui.lbl(_stats(h, h.atk), 13))
+	pop_box.add_child(ui.lbl(_stats(h, battle.atk_of(h)), 13))
 	pop_box.add_child(ui.lbl(h.d.get("note", "Hunts down the nearest monster.") + " Red tiles show where it can strike next turn.", 12, "#a7998f"))
 	var s = battle.sel
 	if s and not s.acted:

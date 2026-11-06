@@ -221,6 +221,15 @@ static func furniture(c: CanvasItem, k: String, now: float, seed: int, mcol: Col
 				rect(c, e[0] - 2, e[1] - 10, 4, 12, C("#e8dcc0"))
 				glow(c, Vector2(e[0], e[1] - 14), 10, C("#ffc864", 0.55))
 				ell(c, Vector2(e[0], e[1] - 14 + sin(now * 9 + e[0]) * 0.8), 2, 4, C("#ffd070"))
+		"bonewall":
+			shadow(c, 22)
+			ell(c, Vector2(32, 40), 24, 16, C("#8a8070"))
+			ell(c, Vector2(32, 34), 20, 14, C("#c8bca0"))
+			c.draw_circle(Vector2(26, 26), 8, C("#e8dcc0"))
+			c.draw_circle(Vector2(23, 25), 2.2, C("#1d1822"))
+			c.draw_circle(Vector2(29, 25), 2.2, C("#1d1822"))
+			ln(c, Vector2(36, 30), Vector2(50, 22), C("#e8dcc0"), 4.0)
+			ln(c, Vector2(14, 44), Vector2(30, 38), C("#e8dcc0"), 4.0)
 		"well":
 			c.draw_circle(Vector2(32, 32), 24, C("#4b4352"))
 			glow(c, Vector2(32, 32), 22, C("#7fb4ff", 0.7))
@@ -348,6 +357,26 @@ static func monster(c: CanvasItem, mk: String, col: Color, R: float, bob: float,
 			ell(c, Vector2(-7, -8 + bob), 4, 5, C("#f4f0ff"))
 			ell(c, Vector2(7, -8 + bob), 4, 5, C("#f4f0ff"))
 			arc(c, Vector2(0, -6), R + 4 + sin(now * 5) * 2, C("#c77dff", 0.5), 2, PI * 1.1, PI * 1.9)
+		"darklord":
+			# a hooded wizard with a glowing staff
+			poly(c, [Vector2(-R * 0.9, R), Vector2(-R * 0.45, -R * 0.35 + bob), Vector2(R * 0.45, -R * 0.35 + bob), Vector2(R * 0.9, R)], w if fl else C("#1c1a3a"))
+			poly(c, [Vector2(-R * 0.5, -R * 0.2 + bob), Vector2(0, -R * 1.15 + bob), Vector2(R * 0.5, -R * 0.2 + bob)], w if fl else C("#2a2756"))
+			ell(c, Vector2(0, -R * 0.38 + bob), 7, 6, C("#0a0814"))
+			rect(c, -4, -R * 0.42 + bob, 3, 2, C("#a8b4ff"))
+			rect(c, 1, -R * 0.42 + bob, 3, 2, C("#a8b4ff"))
+			ln(c, Vector2(-R * 0.85, R), Vector2(-R * 0.85, -R * 0.9), C("#4a3a5a"), 3)
+			c.draw_circle(Vector2(-R * 0.85, -R), 8 + sin(now * 4) * 2, C("#7d8cff", 0.45))
+			c.draw_circle(Vector2(-R * 0.85, -R), 5, C("#c8d0ff"))
+		"squire":
+			# a dark knight: horned helm, black blade, kite shield
+			ell(c, Vector2(0, 6 + bob * 0.5), R * 0.75, R * 0.7, w if fl else C("#3a3c4a"))
+			c.draw_circle(Vector2(0, -R * 0.45 + bob), R * 0.42, w if fl else C("#4a4d5e"))
+			rect(c, -R * 0.32, -R * 0.5 + bob, R * 0.64, 3, C("#ff5050"))
+			poly(c, [Vector2(-R * 0.35, -R * 0.75 + bob), Vector2(-R * 0.65, -R * 1.15 + bob), Vector2(-R * 0.2, -R * 0.85 + bob)], C("#d8d0c0"))
+			poly(c, [Vector2(R * 0.35, -R * 0.75 + bob), Vector2(R * 0.65, -R * 1.15 + bob), Vector2(R * 0.2, -R * 0.85 + bob)], C("#d8d0c0"))
+			poly(c, [Vector2(-R * 0.95, -2), Vector2(-R * 0.45, -4), Vector2(-R * 0.45, 10), Vector2(-R * 0.7, 18), Vector2(-R * 0.95, 10)], C("#2a2c38"))
+			ln(c, Vector2(R * 0.7, R * 0.6), Vector2(R * 0.95, -R * 0.9), C("#1a1a24"), 5)
+			ln(c, Vector2(R * 0.5, R * 0.3), Vector2(R * 0.95, R * 0.25), C("#a8aec8"), 3)
 		_:
 			var open := maxf(0.0, sin(now * 2.2)) * 6
 			rect(c, -R, -4 + open * 0.2, R * 2, R * 0.9, w if fl else C("#7a4a22"))
@@ -385,6 +414,14 @@ static func minion(c: CanvasItem, kind: String, bob: float, fl: bool, now: float
 			c.draw_circle(Vector2(4, -5 + bob), 3, C("#1d1822"))
 			for i in 3:
 				rect(c, -4 + i * 3.5, 6 + bob, 1.5, 4, C("#1d1822"))
+		"ogre":
+			ell(c, Vector2(0, 4 + bob * 0.5), 20, 15, w if fl else C("#7d8a4a"))
+			c.draw_circle(Vector2(0, -12 + bob), 11, w if fl else C("#8f9c58"))
+			rect(c, -6, -14 + bob, 4, 3, C("#ffd040"))
+			rect(c, 2, -14 + bob, 4, 3, C("#ffd040"))
+			rect(c, -5, -6 + bob, 2, 4, C("#f0ead8"))
+			rect(c, 3, -6 + bob, 2, 4, C("#f0ead8"))
+			ln(c, Vector2(16, 10 + bob), Vector2(24, -12 + bob), C("#6a4a2a"), 6.0)
 		"spawn":
 			poly(c, [Vector2(-16, 4 + bob), Vector2(-6, -6 + bob), Vector2(6, -6 + bob), Vector2(16, 4 + bob), Vector2(0, 12)], C("#1a0c12"))
 			c.draw_circle(Vector2(0, -4 + bob), 8, w if fl else C("#d8c8c8"))

@@ -29,6 +29,16 @@ const MONSTERS := {
 		"specials": [
 			{"id": "lure", "name": "Glittering Lure", "cd": 3, "kind": "tile", "range": 7, "any": true, "desc": "Pick a tile. Every hero is dragged 2 steps toward it, over your traps."},
 			{"id": "snap", "name": "Snap Trap", "cd": 2, "kind": "tile", "range": 4, "notrap": true, "desc": "Place a permanent spike trap on an empty tile within 4."}]},
+	# a duo: the Dark Lord is the run's monster; his Squire fights beside him as a second unit
+	"darklord": {"name": "The Dark Lord", "role": "Duo", "col": "#7d8cff", "hp": 18, "move": 3, "atk": 3, "rng": 3, "attack": "Doombolt",
+		"blurb": "A frail wizard and his armored Squire, played as two units. Stronger side by side. Doombolt ignores armor.",
+		"specials": [
+			{"id": "hex", "name": "Hex", "cd": 3, "kind": "enemy", "range": 4, "desc": "A hero within 4 deals 2 less damage and takes 2 more for 2 turns."},
+			{"id": "ward", "name": "Dark Ward", "cd": 3, "kind": "ally", "range": 3, "free": true, "desc": "The Squire or a minion within 3 gets a shield that soaks the next 6 damage."}],
+		"partner": {"name": "The Squire", "col": "#a8aec8", "hp": 24, "move": 3, "atk": 6, "rng": 1, "armor": 1, "attack": "Black Blade",
+			"specials": [
+				{"id": "challenge", "name": "Challenge", "cd": 3, "kind": "self", "range": 2, "desc": "Heroes within 2 must come at the Squire on their next turn."},
+				{"id": "rally", "name": "Rally", "cd": 4, "kind": "self", "range": 3, "free": true, "desc": "Your minions within 3 get +1 move and +2 damage this turn."}]}},
 }
 
 const UNITS := {
@@ -36,6 +46,7 @@ const UNITS := {
 	"hound": {"name": "Hellhound", "hp": 11, "move": 5, "atk": 4, "rng": 1, "cost": 25},
 	"spawn": {"name": "Vampire Spawn", "hp": 10, "move": 4, "atk": 4, "rng": 1, "leech": true, "undead": true, "cost": 30},
 	"skeleton": {"name": "Skeleton", "hp": 6, "move": 2, "atk": 3, "rng": 1, "undead": true, "cost": 8},
+	"ogre": {"name": "Ogre", "hp": 30, "move": 2, "atk": 6, "rng": 1, "cost": 40},
 	"thrall": {"name": "Thrall", "hp": 10, "move": 3, "atk": 3, "rng": 1, "cost": 18},
 	"ghoul": {"name": "Ghoul", "hp": 11, "move": 3, "atk": 4, "rng": 1, "undead": true},
 	"peasant": {"name": "Peasant", "hp": 9, "move": 3, "atk": 2, "rng": 1, "gold": 6, "col": "#a8794e"},
@@ -88,6 +99,22 @@ const ROOMS := {
 		"objs": [[1, 1, "rack2", 1], [3, 1, "maiden", 1], [1, 3, "chains"], [3, 3, "blood"], [2, 2, "blood"], [0, 4, "chains"]]},
 	"collapse": {"unlock": 40, "name": "Collapsing Hall", "col": "#8a7f90", "cost": [30, 50, 75],
 		"objs": [[1, 1, "cracked", 1], [3, 3, "cracked", 1], [3, 1, "rubble"], [1, 3, "rubble"], [0, 0, "rubble"]]},
+	"sanctum": {"owner": "darklord", "name": "Dark Sanctum", "col": "#7d8cff", "cost": [35, 55, 80],
+		"objs": [[2, 2, "runecircle"], [0, 0, "shelf", 1], [4, 0, "shelf", 1], [1, 3, "candles"], [3, 3, "candles"], [3, 1, "crystal", 1]]},
+	"trainingyard": {"unlock": 35, "owner": "darklord", "name": "Training Yard", "col": "#a8aec8", "cost": [30, 50, 75],
+		"objs": [[0, 0, "rack", 1], [4, 0, "rack", 1], [1, 1, "armor", 1], [3, 3, "armor", 1], [1, 3, "anvil", 1]]},
+	"oathstone": {"unlock": 45, "owner": "darklord", "name": "Oath Stone", "col": "#b89cff", "cost": [45, 70],
+		"objs": [[2, 2, "altar"], [1, 1, "pillar", 1], [3, 1, "pillar", 1], [1, 3, "pillar", 1], [3, 3, "pillar", 1], [0, 4, "candles"]]},
+	"maze": {"unlock": 30, "name": "Maze of Bones", "col": "#d8ccb0", "cost": [30, 50],
+		"objs": [[0, 0, "bonewall", 1], [4, 0, "bonewall", 1], [1, 1, "bonewall", 1], [3, 1, "bonewall", 1], [1, 3, "bonewall", 1], [3, 3, "bonewall", 1], [0, 4, "bonewall", 1], [4, 4, "bonewall", 1], [2, 2, "bones"]]},
+	"shrine": {"unlock": 35, "name": "Shrine of Desecration", "col": "#7a5a9a", "cost": [35, 55],
+		"objs": [[2, 2, "altar"], [0, 0, "brazier", 1], [4, 0, "brazier", 1], [1, 3, "candles"], [3, 3, "candles"], [3, 1, "blood"]]},
+	"stitching": {"unlock": 35, "name": "Stitching Room", "col": "#9a8a6a", "cost": [35, 55],
+		"objs": [[1, 1, "table", 1], [3, 1, "table", 1], [2, 2, "candles"], [0, 4, "chains"], [4, 4, "barrel", 1], [3, 3, "blood"]]},
+	"scrying": {"unlock": 40, "name": "Scrying Pool", "col": "#5fa8c8", "cost": [40, 60],
+		"objs": [[2, 2, "well"], [1, 1, "crystal", 1], [3, 3, "crystal", 1], [1, 3, "candles"], [3, 1, "candles"]]},
+	"ogreden": {"unlock": 40, "name": "Ogre Den", "col": "#8a9a5a", "cost": [40, 65], "recruit": "ogre", "cap": 1,
+		"objs": [[0, 0, "cage", 1], [4, 4, "barrel", 1], [1, 1, "meat"], [3, 3, "bones"], [3, 1, "bones"], [0, 4, "rack", 1]]},
 	"library": {"owner": "lich", "name": "Arcane Library", "col": "#9b84ff", "cost": [35, 55, 80],
 		"objs": [[0, 0, "shelf", 1], [4, 0, "shelf", 1], [1, 1, "shelf", 1], [3, 1, "shelf", 1], [0, 4, "shelf", 1], [4, 4, "shelf", 1], [2, 2, "candles"], [1, 3, "candles"]]},
 	"manawell": {"unlock": 40, "owner": "lich", "name": "Mana Well", "col": "#7fb4ff", "cost": [40, 70],
@@ -127,6 +154,20 @@ const TRAPS := {
 	"rune": {"name": "Blast rune", "cost": 20, "desc": "Explodes in a 3x3 area. Used up."},
 }
 
+## Dread modifiers: picked before a run, each makes it harder and adds to the souls it banks.
+const MODS := [
+	{"id": "zealous", "name": "Zealous Village", "desc": "Heroes have 25% more HP.", "bonus": 0.15},
+	{"id": "hardened", "name": "Hardened Raiders", "desc": "Heroes deal 1 more damage.", "bonus": 0.15},
+	{"id": "crowded", "name": "Crowded Gate", "desc": "One extra hero every night.", "bonus": 0.2},
+	{"id": "sharp", "name": "Sharp Eyes", "desc": "Every hero spots traps and walks around them.", "bonus": 0.2},
+	{"id": "short", "name": "Short Days", "desc": "2 hours a day instead of 3.", "bonus": 0.25},
+	{"id": "lean", "name": "Lean Coffers", "desc": "Half gold from kills and from the dawn tribute.", "bonus": 0.15},
+	{"id": "norest", "name": "No Rest", "desc": "Nothing heals you at dawn.", "bonus": 0.15},
+	{"id": "crusade", "name": "Restless Crusade", "desc": "Boss nights every 4 nights instead of 5.", "bonus": 0.1},
+	{"id": "godless", "name": "Godless", "desc": "No dark boons after nights.", "bonus": 0.3},
+	{"id": "glass", "name": "Glass Lair", "desc": "Your monster starts with 25% less max HP.", "bonus": 0.2},
+]
+
 const BOONS := [
 	{"id": "hide", "name": "Thick Hide", "desc": "+6 max HP and heal 6."},
 	{"id": "claws", "name": "Cruel Claws", "desc": "Your basic attack deals +2 damage."},
@@ -163,6 +204,14 @@ static func room_eff(t: String, l: int) -> String:
 		"cistern": return "Heroes in this room move %d tile%s less." % [l, "s" if l > 1 else ""]
 		"torture": return "Heroes who start their turn in here take %d damage." % (2 + l)
 		"collapse": return "Once per fight, drop the ceiling: %d damage to everyone inside, yours too." % (8 + (l - 1) * 4)
+		"sanctum": return "Doombolt deals +%d damage, and Hexed heroes take %d more." % [l, l] + (" Hex also slows." if l >= 3 else "")
+		"trainingyard": return "The Squire gets +%d max HP." % (l * 4) + (" Challenge reaches 3 tiles." if l >= 2 else "")
+		"oathstone": return "The bond between the Dark Lord and his Squire reaches 5 tiles." + (" While bonded, a hit on one heals the other 1 HP." if l >= 2 else "")
+		"maze": return "Heroes who wander in lose their way and stop for the turn." + (" They can't attack that turn either." if l > 1 else "")
+		"shrine": return "Holy heroes inside lose their holy bonus and take %d damage a turn. Clerics can't heal in here." % l
+		"stitching": return "At dawn, sew %s that died last night back together for half its cost." % ("one minion" if l == 1 else "up to two minions")
+		"scrying": return "See tomorrow night's raiders." if l == 1 else "See the raiders of the next two nights."
+		"ogreden": return "Recruit up to %d ogre%s: 30 HP, slow, hits for 6. Good for plugging a doorway." % [l, "s" if l > 1 else ""]
 		"library": return "Your spells deal +%d damage." % (l * 2)
 		"manawell": return "Your spells recharge %d turn%s faster." % [l, "s" if l > 1 else ""]
 		"phylactery": return "Once per fight, when you die, reform at the altar with %d HP." % [8, 14, 20][l - 1]
