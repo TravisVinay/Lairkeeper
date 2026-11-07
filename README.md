@@ -56,6 +56,14 @@ In the editor: **Editor > Manage Export Templates > Download and Install**. Then
 **Project > Export** has presets ready for Windows, Linux and Android. Add macOS and iOS
 there too; both need a Mac with Xcode to sign and build.
 
+### Windows builds and antivirus
+
+The Windows preset writes `Lairkeeper.exe` plus `Lairkeeper.pck`; ship both in the same folder.
+The data is kept out of the .exe on purpose: an embedded PCK makes antivirus heuristics treat
+the game as a packed executable. The preset also fills in version, company and copyright info.
+SmartScreen will still warn on an unsigned .exe until it is code-signed (e.g. Azure Trusted
+Signing) or distributed through Steam or itch.io.
+
 ### Steam
 
 1. Join Steamworks (one-time fee per game) and get an App ID.

@@ -163,7 +163,7 @@ func _render_friend(u) -> void:
 		pop_box.add_child(ui.lbl(("Warded: soaks %d damage. " % u.shield if u.shield > 0 else "") + ("Rallied: +1 move, +2 damage." if u.rally else ""), 12, "#a8b4ff"))
 	if battle.squire != null and battle.is_mon(u):
 		pop_box.add_child(ui.lbl("Bonded: both deal +1 damage, and the Dark Lord's spells recharge faster." if battle.bonded()
-			else "Not bonded. Stand within %d tiles of each other for +1 damage." % (5 if Game.lvl("oathstone") > 0 else 3), 12, "#b89cff" if battle.bonded() else "#8a7f90"))
+			else "Not bonded. Stand within %d tiles of each other for +1 damage." % Data.oath_range(Game.lvl("oathstone")), 12, "#b89cff" if battle.bonded() else "#8a7f90"))
 	if u.acted and u.moved:
 		pop_box.add_child(ui.lbl("Done for this turn.", 13, "#a7998f"))
 		return
@@ -212,5 +212,5 @@ func _render_powers() -> void:
 			func(): battle.collapse(), battle.used.has("collapse") or battle.busy))
 	if Game.lvl("stairs") >= 3 and Game.links.size() > 0:
 		powers.add_child(ui.opt("Bring down the stairs", "used" if battle.used.has("stairs") else "once",
-			"No one moves between floors for 2 hero turns.",
+			"No one moves between floors for %d hero turns." % Data.stairs_shut_turns(Game.lvl("stairs")),
 			func(): battle.shut_stairs(), battle.used.has("stairs") or battle.busy))

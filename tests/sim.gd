@@ -17,6 +17,10 @@ func _ready() -> void:
 	_mods_test()
 	await _rooms_test()
 	_duo_test()
+	_shaman_test()
+	_warlock_test()
+	_party_test()
+	await _decor_test()
 	Game.meta.rooms = Data.ROOMS.keys()   # the scripted runs may use every room
 	await _ui_smoke()
 	for i in 5:
@@ -210,6 +214,167 @@ func _duo_test() -> void:
 	print("DUO: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
 
 
+## Spirit Lodge (a soul unlock) and shamans, endless room levels, recruit placement and boon timing.
+func _shaman_test() -> void:
+	var errors := []
+	Game.new_run("vampire")
+	Game.gold = 9999
+	Game.hours = 99
+	if Game.is_unlocked("lodge"): errors.append("Spirit Lodge open without souls")
+	Game.meta.souls = 30
+	if not Game.unlock_room("lodge") or Game.meta.souls != 0: errors.append("could not unlock the Spirit Lodge for 30 souls")
+	Game.dig(8)
+	Game.build(8, "lodge")
+	if Game.slots[8].get("type", "") != "lodge": errors.append("could not build the Spirit Lodge")
+	Game.recruit("shaman")
+	if Game.count_of("shaman") != 1: errors.append("no shaman recruited")
+	if Game.sel_minion == null or Game.sel_minion.kind != "shaman": errors.append("new shaman not handed over for placement")
+	Game.sel_minion = null
+	Game.recruit("shaman")
+	if Game.count_of("shaman") != 1: errors.append("recruited past the cap")
+	# rooms level past their listed prices, with costs that keep climbing
+	for i in 5:
+		Game.upgrade(8)
+	if Game.slots[8].lvl != 6: errors.append("lodge stopped at level %d" % Game.slots[8].lvl)
+	if Game.cap_of("shaman") != 6: errors.append("level 6 lodge houses %d" % Game.cap_of("shaman"))
+	if not (Data.room_cost("lodge", 4) > Data.room_cost("lodge", 3) and Data.room_cost("lodge", 3) > 75): errors.append("costs past the table don't climb")
+	# shamans heal your units within 2 tiles at the start of your turn
+	var b := Battle.new()
+	add_child(b)
+	b.mon = b.mk_unit("p", "monster", Game.monster_start())
+	var sh = b.mk_unit("p", "shaman", Game.monster_start() + Vector2i(1, 0))
+	var far = b.mk_unit("p", "goblin", Game.monster_start() + Vector2i(0, 3))
+	b.mon.hp -= 20
+	far.hp -= 4
+	var hp0: int = b.mon.hp
+	b._shaman_mend()
+	if b.mon.hp - hp0 != Data.shaman_mend(6): errors.append("monster healed %d, want %d" % [b.mon.hp - hp0, Data.shaman_mend(6)])
+	if far.hp != far.max_hp - 4: errors.append("healed a unit 3 tiles away")
+	if sh.hp != sh.max_hp: errors.append("shaman hurt itself")
+	b.queue_free()
+	# boons come every fifth night
+	if Game.boon_due(4) or not Game.boon_due(5) or Game.boon_due(6) or not Game.boon_due(10): errors.append("boon nights wrong")
+	Game.day = 5
+	if Game.next_boon_night() != 5: errors.append("day 5 says next boon on night %d" % Game.next_boon_night())
+	Game.day = 6
+	if Game.next_boon_night() != 10: errors.append("day 6 says next boon on night %d" % Game.next_boon_night())
+	Game.meta.rooms = []
+	print("SHAMAN: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
+
+
+## Furniture: rearrange it to wall off the lair, heroes smash through, then repair it.
+func _decor_test() -> void:
+	var errors := []
+	Game.new_run("vampire")
+	Game.gold = 999
+	Game.hours = 99
+	Game.build(7, "barracks")   # the hall between the gate hall and the lair
+	Game.recruit("goblin")
+	Game.minions[0].post = Vector2i(12, 6)   # a guard post furniture can't be set on
+	Game.sel_minion = null
+	Game.toggle_decor(7)
+	# three bunks into the doorway down to the lair (room-local y 4, x 1..3)
+	Game.day_click(Vector2i(10, 5))
+	if Game.decor_pick != Vector2i(10, 5): errors.append("could not pick up a bunk")
+	Game.day_click(Vector2i(11, 9))
+	Game.day_click(Vector2i(14, 5))
+	Game.day_click(Vector2i(12, 6))   # the goblin's post: refused
+	if Game.decor_pick != Vector2i(14, 5) or Game.obj.has(Vector2i(12, 6)): errors.append("set a bunk down on a guard post")
+	Game.day_click(Vector2i(12, 9))
+	Game.day_click(Vector2i(11, 6))
+	Game.day_click(Vector2i(13, 9))
+	for t in [Vector2i(11, 9), Vector2i(12, 9), Vector2i(13, 9)]:
+		if not Game.blocked(t): errors.append("doorway tile %s not blocked" % t)
+	if Game.obj.has(Vector2i(10, 5)): errors.append("bunk left a copy behind")
+	if Game.field([Vector2i(12, 7)]).has(Game.monster_start()): errors.append("the lair is still reachable")
+	Game.day_click(Vector2i(0, 0))   # a click outside the room ends rearranging
+	if Game.decor_room != -1: errors.append("rearranging did not end")
+	# a walled-off barbarian hacks through a bunk
+	var b := Battle.new()
+	add_child(b)
+	b.mon = b.mk_unit("p", "monster", Game.monster_start())
+	var h = b.mk_unit("h", "barbarian", Vector2i(12, 7))
+	var turns := 0
+	while Game.broken_count(7) == 0 and turns < 8 and h.hp > 0:
+		turns += 1
+		await b.hero_turn(h)
+	if Game.broken_count(7) != 1: errors.append("%d pieces smashed after %d turns" % [Game.broken_count(7), turns])
+	if not Game.field([h.pos]).has(Game.monster_start()): errors.append("no way through after smashing")
+	b.queue_free()
+	var g0 := Game.gold
+	Game.repair_room(7)
+	if Game.broken_count(7) != 0 or g0 - Game.gold != Data.DECOR_REPAIR: errors.append("repair: %d broken, paid %d" % [Game.broken_count(7), g0 - Game.gold])
+	if Game.field([Vector2i(12, 7)]).has(Game.monster_start()): errors.append("repaired wall lets heroes through")
+	print("DECOR: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
+	# a sapper next to two traps spends its turn taking apart just one of them
+	var serr := []
+	var b2 := Battle.new()
+	add_child(b2)
+	b2.mon = b2.mk_unit("p", "monster", Game.monster_start())
+	var sp = b2.mk_unit("h", "sapper", Vector2i(12, 3))
+	Game.traps = {Vector2i(11, 3): "spikes", Vector2i(13, 3): "spikes"}
+	await b2.hero_turn(sp)
+	if Game.traps.size() != 1: serr.append("%d traps left after one sapper turn" % Game.traps.size())
+	if sp.pos != Vector2i(12, 3): serr.append("the sapper also moved")
+	await b2.hero_turn(sp)
+	if Game.traps.size() != 0: serr.append("second trap still there")
+	Game.traps = {}
+	b2.queue_free()
+	print("SAPPER: ", "ok" if serr.is_empty() else "BAD " + "; ".join(serr))
+
+
+## Raiders: peasants and archers only through night 5, new types phase in after, peasants fade out.
+func _party_test() -> void:
+	var errors := []
+	Game.new_run("vampire")
+	var seen := {}
+	for d in range(1, 21):
+		seen[d] = {}
+		for i in 200:
+			for k in Game.make_party(d):
+				seen[d][k] = true
+	for d in range(1, 6):
+		for k in seen[d]:
+			if not k in ["peasant", "archer", "paladin"]: errors.append("a %s on night %d" % [k, d])
+	if seen[1].keys() != ["peasant"]: errors.append("night 1 heroes: %s" % [seen[1].keys()])
+	if not seen[5].has("paladin"): errors.append("no Paladin on night 5")
+	if seen[6].has("knight") or not seen[6].has("rogue"): errors.append("night 6 heroes: %s" % [seen[6].keys()])
+	if seen[13].has("peasant") or seen[20].has("peasant"): errors.append("peasants still raiding late")
+	if not seen[11].has("barbarian"): errors.append("no barbarian by night 11")
+	if Game.hero_atk_bonus(5) != 0: errors.append("heroes hit harder by night 5")
+	print("PARTY: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
+
+
+## Warlock Coven: a starter room that hires warlocks whose bolts ignore armor.
+func _warlock_test() -> void:
+	var errors := []
+	Game.new_run("vampire")
+	Game.gold = 9999
+	Game.hours = 99
+	if not Game.is_unlocked("coven"): errors.append("Warlock Coven needs souls")
+	Game.dig(8)
+	Game.build(8, "coven")
+	Game.recruit("warlock")
+	if Game.count_of("warlock") != 1: errors.append("no warlock recruited")
+	var b := Battle.new()
+	add_child(b)
+	b.mon = b.mk_unit("p", "monster", Game.monster_start())
+	var w = b.mk_unit("p", "warlock", Game.monster_start() + Vector2i(1, 0))
+	var g = b.mk_unit("p", "goblin", Game.monster_start() + Vector2i(-1, 0))
+	var k = b.mk_unit("h", "knight", Game.monster_start() + Vector2i(1, 2))
+	var hp0: int = k.hp
+	await b.attack(w, k)
+	if hp0 - k.hp != b.atk_of(w): errors.append("warlock bolt did %d to a knight, want %d" % [hp0 - k.hp, b.atk_of(w)])
+	hp0 = k.hp
+	await b.attack(g, k)
+	if hp0 - k.hp != b.atk_of(g) - 1: errors.append("knight armor stopped nothing from a goblin")
+	var a1: int = b.atk_of(w)
+	Game.upgrade(8)
+	if b.atk_of(w) != a1 + 1: errors.append("level 2 coven did not add damage")
+	b.queue_free()
+	print("WARLOCK: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
+
+
 ## Checks the rule of each room added in the second rooms batch.
 func _rooms_test() -> void:
 	var errors := []
@@ -232,7 +397,7 @@ func _rooms_test() -> void:
 	var g0 := Game.gold
 	var want_next: Array = Game.future[0]
 	Game.dawn({})
-	if Game.count_of("goblin") != 1 or g0 + 10 - Game.gold != 7: errors.append("Stitching Room: %d goblins, paid %d" % [Game.count_of("goblin"), g0 + 10 - Game.gold])
+	if Game.count_of("goblin") != 1 or g0 + 10 - Game.gold != Data.UNITS.goblin.cost / 2: errors.append("Stitching Room: %d goblins, paid %d" % [Game.count_of("goblin"), g0 + 10 - Game.gold])
 	# Scrying Pool: tomorrow's party is the one it showed, and two more nights are lined up
 	if Game.party != want_next or Game.future.size() != 2: errors.append("Scrying Pool: party %s, %d ahead" % [Game.party, Game.future.size()])
 	# Maze of Bones: a hero walking in from the gate hall stops on the first maze tile

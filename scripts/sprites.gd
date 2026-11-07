@@ -399,6 +399,28 @@ static func minion(c: CanvasItem, kind: String, bob: float, fl: bool, now: float
 			rect(c, -6, -3 + bob, 4, 3, C("#ffe25a"))
 			rect(c, 2, -3 + bob, 4, 3, C("#ffe25a"))
 			ln(c, Vector2(9, 6 + bob), Vector2(17, -3 + bob), C("#d0d6dc"), 2.5)
+		"shaman":
+			# a gnarled staff with a green spirit-light, then a goblin in a bone mask and feathers
+			ln(c, Vector2(-14, 14 + bob), Vector2(-12, -22 + bob), C("#7a5a34"), 3.0)
+			c.draw_circle(Vector2(-12, -24 + bob), 5 + sin(now * 5) * 1.2, C("#b8f070", 0.85))
+			poly(c, [Vector2(-10, -4 + bob), Vector2(-22, -11 + bob), Vector2(-9, 2 + bob)], C("#5f8f3a"))
+			poly(c, [Vector2(10, -4 + bob), Vector2(22, -11 + bob), Vector2(9, 2 + bob)], C("#5f8f3a"))
+			c.draw_circle(Vector2(0, bob), 12, w if fl else C("#6f9a48"))
+			poly(c, [Vector2(-8, -10 + bob), Vector2(8, -10 + bob), Vector2(6, 2 + bob), Vector2(-6, 2 + bob)], C("#e8dcc0"))
+			rect(c, -5, -5 + bob, 3, 3, C("#1d1822"))
+			rect(c, 2, -5 + bob, 3, 3, C("#1d1822"))
+			poly(c, [Vector2(-6, -10 + bob), Vector2(-9, -24 + bob), Vector2(-2, -11 + bob)], C("#d9573f"))
+			poly(c, [Vector2(-1, -11 + bob), Vector2(1, -27 + bob), Vector2(4, -11 + bob)], C("#e4a648"))
+			poly(c, [Vector2(3, -11 + bob), Vector2(9, -23 + bob), Vector2(7, -9 + bob)], C("#4f8fbf"))
+		"warlock":
+			# a small hooded figure in violet robes, a curse crackling in one hand
+			poly(c, [Vector2(-12, 14), Vector2(-7, -2 + bob), Vector2(7, -2 + bob), Vector2(12, 14)], w if fl else C("#4a2a6a"))
+			poly(c, [Vector2(-10, -2 + bob), Vector2(0, -24 + bob), Vector2(10, -2 + bob)], w if fl else C("#5e3488"))
+			c.draw_circle(Vector2(0, -5 + bob), 6, C("#120e15"))
+			rect(c, -4, -7 + bob, 3, 2, C("#9bff7a"))
+			rect(c, 1, -7 + bob, 3, 2, C("#9bff7a"))
+			c.draw_circle(Vector2(14, 2 + bob), 4 + sin(now * 7) * 1.0, C("#c77dff", 0.9))
+			c.draw_circle(Vector2(14, 2 + bob), 7, C("#c77dff", 0.25))
 		"hound":
 			ell(c, Vector2(0, bob * 0.5), 18, 11, w if fl else C("#6a1e1a"))
 			c.draw_circle(Vector2(12, -6), 9, w if fl else C("#6a1e1a"))

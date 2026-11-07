@@ -564,12 +564,11 @@ func render_room_panel() -> void:
 			room_box.add_child(lbl("%d more room%s can be unlocked with souls between runs." % [locked, "s" if locked > 1 else ""], 13, "#a7998f"))
 	else:
 		var R: Dictionary = Data.ROOMS[s.type]
-		room_box.add_child(h3("Selected" + (" · level %d" % s.lvl if R.cost.size() > 1 else "")))
+		room_box.add_child(h3("Selected · level %d" % s.lvl))
 		room_box.add_child(title(R.name, Game.M.col if s.type == "lair" else R.col))
 		room_box.add_child(lbl(Data.room_eff(s.type, s.lvl), 15))
-		if s.lvl < R.cost.size():
-			var c: int = R.cost[s.lvl]
-			room_box.add_child(opt("Upgrade to level %d" % (s.lvl + 1), "1h · %dg" % c, R.get("next", Data.room_eff(s.type, s.lvl + 1)), func(): Game.upgrade(i), Game.gold < c or Game.hours < 1 or not Game.allowed("upgrade:%d" % i)))
+		var c := Data.room_cost(s.type, s.lvl)
+		room_box.add_child(opt("Upgrade to level %d" % (s.lvl + 1), "1h · %dg" % c, R.get("next", Data.room_eff(s.type, s.lvl + 1)), func(): Game.upgrade(i), Game.gold < c or Game.hours < 1 or not Game.allowed("upgrade:%d" % i)))
 		if R.has("recruit"):
 			var k: String = R.recruit
 			var U: Dictionary = Data.UNITS[k]
@@ -577,6 +576,17 @@ func render_room_panel() -> void:
 			var cap := Game.cap_of(k)
 			room_box.add_child(opt("Recruit %s" % U.name.to_lower(), "%dg" % U.cost, "%d of %d housed · %d HP, hits for %d, moves %d" % [n, cap, U.hp, U.atk, U.move],
 				func(): Game.recruit(k), n >= cap or Game.gold < U.cost or not Game.allowed("recruit:" + k)))
+		var dec_on := Game.decor_room == i
+		room_box.add_child(opt("Done rearranging" if dec_on else "Rearrange furniture", "free",
+			"Click a piece, then an empty tile in this room. Press again when done." if dec_on
+			else "Move this room's furniture. Wall heroes off and they'll smash their way through.",
+			func(): Game.toggle_decor(i), not Game.allowed("decor") and not dec_on, dec_on))
+		var nb := Game.broken_count(i)
+		if nb > 0:
+			var rc := nb * Data.DECOR_REPAIR
+			room_box.add_child(opt("Repair %d smashed piece%s" % [nb, "s" if nb > 1 else ""], "%dg" % rc,
+				"Heroes broke through here. Rubble blocks no one until it's rebuilt.",
+				func(): Game.repair_room(i), Game.gold < rc or not Game.allowed("decor")))
 		if not R.get("fixed", false):
 			room_box.add_child(opt("Tear it down", "1h", "No refund. Leaves an empty chamber.", func(): Game.demolish(i), Game.hours < 1 or not Game.allowed("demolish")))
 
@@ -598,6 +608,8 @@ func _toggle_entrance() -> void:
 	Game.ent_mode = not Game.ent_mode
 	Game.trap_mode = ""
 	Game.sel_minion = null
+	Game.decor_room = -1
+	Game.decor_pick = null
 	refresh()
 
 func render_trap_panel() -> void:
@@ -620,6 +632,8 @@ func _toggle_trap(t: String) -> void:
 	Game.trap_mode = "" if Game.trap_mode == t else t
 	Game.sel_minion = null
 	Game.ent_mode = false
+	Game.decor_room = -1
+	Game.decor_pick = null
 	refresh()
 
 func render_minion_panel() -> void:
@@ -636,7 +650,7 @@ func render_minion_panel() -> void:
 	for k in counts:
 		parts.append("%d × %s" % [counts[k], Data.UNITS[k].name])
 	minion_box.add_child(lbl(", ".join(parts), 15))
-	minion_box.add_child(lbl("Moving a %s. Click an open tile for its new post." % Data.UNITS[Game.sel_minion.kind].name.to_lower() if Game.sel_minion != null else "Click a minion on the map, then an open tile, to move its guard post.", 14, "#a7998f"))
+	minion_box.add_child(lbl("Moving a %s. Click an open tile for its new post, or press Esc to leave it." % Data.UNITS[Game.sel_minion.kind].name.to_lower() if Game.sel_minion != null else "Click a minion on the map, then an open tile, to move its guard post.", 14, "#a7998f"))
 
 func render_party() -> void:
 	clear(party_box)
@@ -652,10 +666,12 @@ func render_party() -> void:
 		var fn := []
 		for k in Game.future[n]:
 			fn.append(Data.UNITS[k].name)
-		party_box.add_child(lbl("%s: %s" % ["Tomorrow" if n == 0 else "In two nights", ", ".join(fn)], 14, "#5fa8c8"))
+		party_box.add_child(lbl("%s: %s" % ["Tomorrow" if n == 0 else "In %d nights" % (n + 1), ", ".join(fn)], 14, "#5fa8c8"))
 	clear(boon_box)
 	boon_box.add_child(h3("Dark boons"))
-	boon_box.add_child(lbl(", ".join(Game.taken) if Game.taken.size() > 0 else "None yet. Survive a night to earn one.", 15, "#c9a7ff" if Game.taken.size() > 0 else "#a7998f"))
+	boon_box.add_child(lbl(", ".join(Game.taken) if Game.taken.size() > 0 else "None yet.", 15, "#c9a7ff" if Game.taken.size() > 0 else "#a7998f"))
+	if not Game.has_mod("godless"):
+		boon_box.add_child(lbl("Next boon: survive night %d." % Game.next_boon_night(), 13, "#a7998f"))
 
 
 # ---------------------------------------------------------------- night panels
@@ -802,19 +818,20 @@ func _show_pick(r: Dictionary) -> void:
 	var extra := ""
 	if r.stolen > 0: extra += ", %d gold stolen by thieves who got away" % r.stolen
 	var lost := "You lost %d minion%s; recruit replacements by day. " % [r.lost, "s" if r.lost > 1 else ""] if r.lost > 0 else ""
-	var godless := Game.has_mod("godless")
-	v.add_child(lbl("%d heroes defeated, %d gold looted%s. %s%s" % [r.kills, r.loot, extra, lost,
-		"Godless: no boon tonight." if godless else "Choose a dark boon."], 16, "#a7998f"))
+	var due := Game.boon_due(Game.day)
+	var why := "Choose a dark boon." if due else ("Godless: no boons this run." if Game.has_mod("godless")
+		else "Your next dark boon comes after night %d." % Game.next_boon_night())
+	v.add_child(lbl("%d heroes defeated, %d gold looted%s. %s%s" % [r.kills, r.loot, extra, lost, why], 16, "#a7998f"))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	v.add_child(row)
-	if godless:
+	if not due:
 		var gb := Button.new()
 		gb.text = "Greet the dawn"
 		gb.theme_type_variation = "PrimaryButton"
 		gb.pressed.connect(func(): _pick({}))
 		row.add_child(gb)
-	for o in ([] if godless else Game.boon_choices()):
+	for o in (Game.boon_choices() if due else []):
 		var bt := opt(o.name, "", o.desc, func(): _pick(o))
 		bt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		bt.custom_minimum_size = Vector2(200, 90)
