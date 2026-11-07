@@ -300,6 +300,11 @@ func _draw() -> void:
 		if here(k) and Game.obj[k].block:
 			draw_set_transform_matrix(xf * Transform2D(0.0, Vector2(k) * T))
 			Sprites.furniture(self, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
+			# furniture the heroes are hacking at shows how much it has left
+			if battle and battle.decor_hp.has(k):
+				var f := float(battle.decor_hp[k]) / Data.decor_hp(Game.obj[k].kind)
+				draw_rect(Rect2(6, T - 12, T - 12, 7), Color(0.05, 0.04, 0.06, 0.8))
+				draw_rect(Rect2(6, T - 12, (T - 12) * f, 7), Data.col("#e4a648"))
 	draw_set_transform_matrix(xf)
 
 	# room labels
@@ -312,7 +317,7 @@ func _draw() -> void:
 		var o := Vector2(Game.slot_xy(si) * Game.RS) * T
 		var nm: String = "Empty chamber" if sl.state == "dug" else Data.ROOMS[sl.type].name
 		if sl.get("lvl", 1) > 1:
-			nm += " " + "I".repeat(sl.lvl)
+			nm += " " + Data.roman(sl.lvl)
 		var col := Data.col("#8a7f90") if sl.state == "dug" else (mcol if sl.type == "lair" else Data.col(Data.ROOMS[sl.type].col))
 		col.a = 0.75 if battle else 1.0
 		# a dark plate behind the name keeps it readable over floor and furniture
@@ -404,6 +409,13 @@ func _draw_gate(xf: Transform2D) -> void:
 		draw_string(font, at, "+%d waiting" % battle.queue.size(), HORIZONTAL_ALIGNMENT_CENTER, 220, 20, Data.col("#ffd090"))
 
 func _draw_day_overlay() -> void:
+	# rearranging furniture: movable pieces outlined, the picked one bright, free spots tinted
+	if Game.decor_room >= 0 and Game.floor_of_slot(Game.decor_room) == shown_floor:
+		for p in Game.slot_tiles(Game.decor_room):
+			if Game.decor_movable(p):
+				draw_rect(Rect2(p.x * T + 3, p.y * T + 3, T - 6, T - 6), Data.col("#b89cff", 1.0 if p == Game.decor_pick else 0.45), false, 3.0)
+			elif Game.decor_pick != null and Game.decor_spot_ok(p):
+				draw_rect(Rect2(p.x * T + 4, p.y * T + 4, T - 8, T - 8), Data.col("#b89cff", 0.2 + sin(now * 4.0) * 0.06))
 	if Game.ent_mode:
 		var a := 0.25 + sin(now * 4.0) * 0.1
 		for y in range(shown_floor * Game.BH, (shown_floor + 1) * Game.BH):
@@ -416,8 +428,8 @@ func _draw_day_overlay() -> void:
 		draw_rect(Rect2(o + Vector2(4, 4), Vector2(Game.RS, Game.RS) * T - Vector2(8, 8)), Data.col("#e4a648"), false, 4.0)
 	if not Game.in_b(hover):
 		return
-	if Game.trap_mode != "" or Game.sel_minion != null or Game.ent_mode:
-		var c := Data.col("#e4a648") if Game.trap_mode != "" else (Data.col("#ffd090") if Game.ent_mode else Data.col("#86b35e"))
+	if Game.trap_mode != "" or Game.sel_minion != null or Game.ent_mode or Game.decor_room >= 0:
+		var c := Data.col("#e4a648") if Game.trap_mode != "" else (Data.col("#ffd090") if Game.ent_mode else (Data.col("#b89cff") if Game.decor_room >= 0 else Data.col("#86b35e")))
 		draw_rect(Rect2(hover.x * T + 3, hover.y * T + 3, T - 6, T - 6), c, false, 3.0)
 	else:
 		var o := Vector2(Game.slot_xy(Game.slot_of(hover)) * Game.RS) * T

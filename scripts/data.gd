@@ -42,22 +42,26 @@ const MONSTERS := {
 }
 
 const UNITS := {
-	"goblin": {"name": "Goblin", "hp": 8, "move": 3, "atk": 3, "rng": 1, "cost": 15},
-	"hound": {"name": "Hellhound", "hp": 11, "move": 5, "atk": 4, "rng": 1, "cost": 25},
-	"spawn": {"name": "Vampire Spawn", "hp": 10, "move": 4, "atk": 4, "rng": 1, "leech": true, "undead": true, "cost": 30},
-	"skeleton": {"name": "Skeleton", "hp": 6, "move": 2, "atk": 3, "rng": 1, "undead": true, "cost": 8},
-	"ogre": {"name": "Ogre", "hp": 30, "move": 2, "atk": 6, "rng": 1, "cost": 40},
-	"thrall": {"name": "Thrall", "hp": 10, "move": 3, "atk": 3, "rng": 1, "cost": 18},
+	"goblin": {"name": "Goblin", "hp": 8, "move": 3, "atk": 3, "rng": 1, "cost": 12},
+	"hound": {"name": "Hellhound", "hp": 11, "move": 5, "atk": 4, "rng": 1, "cost": 20},
+	"spawn": {"name": "Vampire Spawn", "hp": 10, "move": 4, "atk": 4, "rng": 1, "leech": true, "undead": true, "cost": 24},
+	"skeleton": {"name": "Skeleton", "hp": 6, "move": 2, "atk": 3, "rng": 1, "undead": true, "cost": 6},
+	"ogre": {"name": "Ogre", "hp": 30, "move": 2, "atk": 6, "rng": 1, "cost": 32},
+	"thrall": {"name": "Thrall", "hp": 10, "move": 3, "atk": 3, "rng": 1, "cost": 14},
+	"shaman": {"name": "Goblin Shaman", "hp": 7, "move": 3, "atk": 2, "rng": 3, "cost": 24,
+		"note": "Heals your units within 2 tiles at the start of each of your turns."},
+	"warlock": {"name": "Warlock", "hp": 6, "move": 3, "atk": 3, "rng": 3, "cost": 28, "magic": true,
+		"note": "A lesser dark wizard. Its eldritch bolts ignore armor."},
 	"ghoul": {"name": "Ghoul", "hp": 11, "move": 3, "atk": 4, "rng": 1, "undead": true},
 	"peasant": {"name": "Peasant", "hp": 9, "move": 3, "atk": 2, "rng": 1, "gold": 6, "col": "#a8794e"},
 	"rogue": {"name": "Rogue", "hp": 10, "move": 4, "atk": 3, "rng": 1, "gold": 10, "col": "#7b5aac", "sense": true, "thief": true, "note": "Spots traps. Robs your Treasury and runs for the exit."},
 	"archer": {"name": "Archer", "hp": 9, "move": 3, "atk": 3, "rng": 4, "gold": 10, "col": "#6e9a5a", "note": "Shoots 4 tiles. Walls and furniture block arrows."},
 	"knight": {"name": "Knight", "hp": 18, "move": 2, "atk": 4, "rng": 1, "armor": 1, "gold": 14, "col": "#b9c3cd", "note": "Armor blocks 1 damage per hit."},
 	"cleric": {"name": "Cleric", "hp": 12, "move": 3, "atk": 2, "rng": 1, "heal": 5, "holy": true, "gold": 12, "col": "#efe6cf", "note": "Heals heroes within 3. Holy: +3 damage to undead and vampires."},
-	"sapper": {"name": "Dwarf Sapper", "hp": 13, "move": 3, "atk": 3, "rng": 1, "armor": 1, "sense": true, "disarm": true, "gold": 13, "col": "#b0703a", "note": "Dismantles every trap next to him. Permanently."},
+	"sapper": {"name": "Dwarf Sapper", "hp": 13, "move": 3, "atk": 3, "rng": 1, "armor": 1, "sense": true, "disarm": true, "gold": 13, "col": "#b0703a", "note": "Spends its whole turn dismantling a trap next to it. Permanently."},
 	"mage": {"name": "Battle Mage", "hp": 10, "move": 3, "atk": 4, "rng": 3, "splash": true, "gold": 15, "col": "#4f7fd8", "note": "Fireballs also hit everything next to the target."},
 	"barbarian": {"name": "Barbarian", "hp": 24, "move": 3, "atk": 6, "rng": 1, "gold": 16, "col": "#c0603a", "note": "Huge HP, huge hits."},
-	"paladin": {"name": "Paladin", "hp": 40, "move": 2, "atk": 6, "rng": 1, "armor": 2, "holy": true, "gold": 60, "col": "#e3b23f", "boss": true, "note": "Boss. Armor blocks 2. Holy."},
+	"paladin": {"name": "Paladin", "hp": 36, "move": 2, "atk": 6, "rng": 1, "armor": 2, "holy": true, "gold": 60, "col": "#e3b23f", "boss": true, "note": "Boss. Armor blocks 2. Holy."},
 }
 
 const NAMES := {
@@ -89,6 +93,10 @@ const ROOMS := {
 		"objs": [[0, 0, "bunk", 1], [4, 0, "bunk", 1], [1, 1, "bunk", 1], [3, 1, "bunk", 1], [2, 2, "fire"], [0, 4, "rack", 1], [4, 4, "rack", 1]]},
 	"kennel": {"unlock": 30, "name": "Hellhound Kennel", "col": "#d9573f", "cost": [40, 65], "recruit": "hound", "cap": 1,
 		"objs": [[0, 0, "cage", 1], [4, 0, "cage", 1], [0, 4, "cage", 1], [4, 4, "cage", 1], [1, 1, "bones"], [3, 3, "bones"], [3, 1, "bones"]]},
+	"lodge": {"unlock": 30, "name": "Spirit Lodge", "col": "#b8c85a", "cost": [30, 50, 75], "recruit": "shaman", "cap": 1,
+		"objs": [[2, 2, "fire"], [0, 0, "brazier", 1], [4, 0, "brazier", 1], [4, 4, "jar", 1], [1, 1, "bones"], [3, 3, "bones"], [1, 3, "candles"]]},
+	"coven": {"name": "Warlock Coven", "col": "#9a4fd0", "cost": [35, 55, 80], "recruit": "warlock", "cap": 1,
+		"objs": [[2, 2, "runecircle"], [0, 0, "brazier", 1], [4, 0, "jar", 1], [0, 4, "shelf", 1], [4, 4, "brazier", 1], [3, 3, "candles"], [1, 1, "blood"]]},
 	"workshop": {"name": "Trap Workshop", "col": "#9aa7b6", "cost": [25, 40, 60],
 		"objs": [[1, 1, "anvil", 1], [3, 1, "bench", 1], [3, 3, "bench", 1], [1, 3, "gear"], [0, 4, "gear"]]},
 	"armory": {"unlock": 25, "name": "Armory", "col": "#b9c3cd", "cost": [30, 50, 75],
@@ -148,6 +156,13 @@ const ROOMS := {
 }
 const EMPTY_OBJS := [[0, 4, "rubble"], [4, 0, "rubble"]]
 
+## Furniture you can rearrange by day. Heroes walled off from you smash blocking pieces;
+## a smashed piece leaves rubble that anyone can walk over until you repair it.
+const FIXED_DECOR := ["throne", "stairs_up"]
+const DECOR_REPAIR := 5   # gold per smashed piece
+const STURDY_DECOR := ["pillar", "cracked", "bonewall", "tomb", "coffin", "forge", "anvil", "maiden", "gearbig", "cage"]
+const DECOR_NAMES := {"rack2": "rack", "gearbig": "great gear", "bonewall": "bone wall", "bigcoffin": "coffin", "bars": "cell bars"}
+
 const TRAPS := {
 	"spikes": {"name": "Spike trap", "cost": 10, "desc": "Hurts every hero that steps on it. Permanent."},
 	"snare": {"name": "Snare", "cost": 8, "desc": "Holds a hero in place through its next turn. Used up."},
@@ -164,22 +179,23 @@ const MODS := [
 	{"id": "lean", "name": "Lean Coffers", "desc": "Half gold from kills and from the dawn tribute.", "bonus": 0.15},
 	{"id": "norest", "name": "No Rest", "desc": "Nothing heals you at dawn.", "bonus": 0.15},
 	{"id": "crusade", "name": "Restless Crusade", "desc": "Boss nights every 4 nights instead of 5.", "bonus": 0.1},
-	{"id": "godless", "name": "Godless", "desc": "No dark boons after nights.", "bonus": 0.3},
+	{"id": "godless", "name": "Godless", "desc": "No dark boons.", "bonus": 0.3},
 	{"id": "glass", "name": "Glass Lair", "desc": "Your monster starts with 25% less max HP.", "bonus": 0.2},
 ]
 
+## Earned every Game.BOON_EVERY nights, so each one is a big step up.
 const BOONS := [
-	{"id": "hide", "name": "Thick Hide", "desc": "+6 max HP and heal 6."},
-	{"id": "claws", "name": "Cruel Claws", "desc": "Your basic attack deals +2 damage."},
-	{"id": "surge", "name": "Arcane Surge", "desc": "Your damaging spells deal +2 damage."},
-	{"id": "swift", "name": "Swift Shadow", "desc": "You move 1 extra tile."},
-	{"id": "pack", "name": "Pack Tactics", "desc": "Your minions deal +1 damage."},
-	{"id": "feast", "name": "Blood Feast", "desc": "Heal 3 HP whenever you kill a hero."},
-	{"id": "rituals", "name": "Dark Rituals", "desc": "All your spells recharge 1 turn faster."},
-	{"id": "greed", "name": "Greed", "desc": "Heroes drop 50% more gold."},
-	{"id": "jagged", "name": "Jagged Traps", "desc": "Traps deal +3 damage."},
-	{"id": "owl", "name": "Night Owl", "desc": "+1 hour of work every day."},
-	{"id": "press", "name": "Press Gang", "desc": "A free goblin joins you now. It does not use barracks space."},
+	{"id": "hide", "name": "Thick Hide", "desc": "+20 max HP and heal to full."},
+	{"id": "claws", "name": "Cruel Claws", "desc": "Your basic attack deals +5 damage."},
+	{"id": "surge", "name": "Arcane Surge", "desc": "Your damaging spells deal +5 damage."},
+	{"id": "swift", "name": "Swift Shadow", "desc": "You move 2 extra tiles."},
+	{"id": "pack", "name": "Pack Tactics", "desc": "Your minions deal +2 damage and have +5 HP."},
+	{"id": "feast", "name": "Blood Feast", "desc": "Heal 8 HP whenever you kill a hero."},
+	{"id": "rituals", "name": "Dark Rituals", "desc": "All your spells recharge 1 turn faster and deal +2 damage."},
+	{"id": "greed", "name": "Greed", "desc": "Heroes drop double gold."},
+	{"id": "jagged", "name": "Jagged Traps", "desc": "Traps deal +8 damage."},
+	{"id": "owl", "name": "Night Owl", "desc": "+1 hour of work every day, and 50 gold now."},
+	{"id": "press", "name": "Press Gang", "desc": "An ogre and two goblins join you now. They don't use any room space."},
 ]
 
 
@@ -189,41 +205,123 @@ static func col(hex: String, a := 1.0) -> Color:
 	return c
 
 
+## Gold to raise a room from level l to l + 1 (l = 0 builds it). Rooms have no level cap:
+## past the listed prices, each level costs 40% more than the one before.
+static func room_cost(t: String, l: int) -> int:
+	var c: Array = ROOMS[t].cost
+	if l < c.size():
+		return c[l]
+	return roundi(c.back() * pow(1.4, l - c.size() + 1) / 5.0) * 5
+
+
+# ---- level scaling for rooms whose effect isn't a plain multiple of the level
+
+static func treasury_gold(l: int) -> int:
+	return 0 if l <= 0 else ([12, 20, 30][l - 1] if l <= 3 else 30 + 10 * (l - 3))
+
+static func larder_heal(l: int) -> int:
+	return 0 if l <= 0 else ([6, 10, 15][l - 1] if l <= 3 else 15 + 5 * (l - 3))
+
+static func phylactery_hp(l: int) -> int:
+	return 0 if l <= 0 else 8 + 6 * (l - 1)
+
+## Hero turns every staircase stays down after the Stairs power (level 3+).
+static func stairs_shut_turns(l: int) -> int:
+	return maxi(2, l - 1)
+
+## Damage to heroes who start their turn in the Flooded Cistern (level 3+).
+static func cistern_drown(l: int) -> int:
+	return maxi(0, 2 * (l - 2))
+
+## How far apart the Dark Lord and Squire can stand and stay bonded.
+static func oath_range(l: int) -> int:
+	return 3 if l <= 0 else 5 + maxi(0, l - 2)
+
+## HP a hit on one of the bonded pair heals the other (Oath Stone level 2+).
+static func oath_heal(l: int) -> int:
+	return maxi(0, l - 1)
+
+## Damage to heroes who blunder into the Maze of Bones (level 3+).
+static func maze_dmg(l: int) -> int:
+	return maxi(0, 3 * (l - 2))
+
+## Share of max HP that foreseen heroes lose (Scrying Pool level 3+), capped at half.
+static func scry_shaken(l: int) -> float:
+	return minf(0.5, 0.05 * maxi(0, l - 2))
+
+## Extra spell damage from the Mana Well once recharge is already maxed out (level 3+).
+static func well_dmg(l: int) -> int:
+	return maxi(0, l - 2)
+
+## HP each Goblin Shaman restores to nearby units at the start of your turn.
+static func shaman_mend(l: int) -> int:
+	return 1 + maxi(1, l)
+
+## Skeletons each Raise Dead brings up.
+static func soul_skeletons(l: int) -> int:
+	return maxi(1, l)
+
+## Extra damage for dominated heroes (Psionic Amplifier level 3+).
+static func amp_dmg(l: int) -> int:
+	return maxi(0, 2 * (l - 2))
+
+## How many hits of damage a blocking piece of furniture takes before it breaks.
+static func decor_hp(kind: String) -> int:
+	return 20 if kind in STURDY_DECOR else 12
+
+static func decor_name(kind: String) -> String:
+	return DECOR_NAMES.get(kind, kind)
+
+## Roman numerals for room labels on the map.
+static func roman(n: int) -> String:
+	var vals := [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+	var syms := ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+	var o := ""
+	for i in vals.size():
+		while n >= vals[i]:
+			o += syms[i]
+			n -= vals[i]
+	return o
+
+
 static func room_eff(t: String, l: int) -> String:
 	match t:
 		"lair": return "You start each fight on your throne and take 1 less damage while in here." + (" +%d max HP." % ((l - 1) * 6) if l > 1 else "")
-		"stairs": return ["Leads up to a new floor. One per floor; the floor above starts where these stairs arrive.",
-			"Spiral stair: heroes who climb it stop at the top for the rest of their turn.",
-			"Spiral stair. Once per fight you can also collapse every staircase for 2 turns."][l - 1]
-		"treasury": return "+%d gold every dawn. Rogues try to rob it and run." % [12, 20, 30][l - 1]
-		"larder": return "Heal %d HP every dawn." % [6, 10, 15][l - 1]
+		"stairs":
+			if l == 1: return "Leads up to a new floor. One per floor; the floor above starts where these stairs arrive."
+			if l == 2: return "Spiral stair: heroes who climb it stop at the top for the rest of their turn."
+			return "Spiral stair. Once per fight you can also collapse every staircase for %d turns." % stairs_shut_turns(l)
+		"treasury": return "+%d gold every dawn. Rogues try to rob it and run." % treasury_gold(l)
+		"larder": return "Heal %d HP every dawn." % larder_heal(l)
 		"barracks": return "Recruit up to %d goblins." % (l * 2)
+		"lodge": return "Recruit up to %d goblin shaman%s. At the start of your turn, each heals your units within 2 tiles for %d HP." % [l, "s" if l > 1 else "", shaman_mend(l)]
+		"coven": return "Recruit up to %d warlock%s. Their bolts ignore armor" % [l, "s" if l > 1 else ""] + (" and deal +%d damage." % (l - 1) if l > 1 else ".")
 		"kennel": return "Recruit up to %d hellhound%s. Fast hunters." % [l, "s" if l > 1 else ""]
-		"workshop": return "Room for %d traps. Unlocks %s." % [3 + l * 3, ["spikes", "spikes and snares", "spikes, snares and blast runes"][l - 1]]
+		"workshop": return "Room for %d traps. Unlocks %s." % [3 + l * 3, ["spikes", "spikes and snares", "spikes, snares and blast runes"][mini(l, 3) - 1]]
 		"armory": return "Your minions deal +%d damage." % l
-		"cistern": return "Heroes in this room move %d tile%s less." % [l, "s" if l > 1 else ""]
+		"cistern": return "Heroes in this room move %d tile%s less." % [l, "s" if l > 1 else ""] + (" They take %d damage at the start of each turn in the water." % cistern_drown(l) if l >= 3 else "")
 		"torture": return "Heroes who start their turn in here take %d damage." % (2 + l)
 		"collapse": return "Once per fight, drop the ceiling: %d damage to everyone inside, yours too." % (8 + (l - 1) * 4)
 		"sanctum": return "Doombolt deals +%d damage, and Hexed heroes take %d more." % [l, l] + (" Hex also slows." if l >= 3 else "")
 		"trainingyard": return "The Squire gets +%d max HP." % (l * 4) + (" Challenge reaches 3 tiles." if l >= 2 else "")
-		"oathstone": return "The bond between the Dark Lord and his Squire reaches 5 tiles." + (" While bonded, a hit on one heals the other 1 HP." if l >= 2 else "")
-		"maze": return "Heroes who wander in lose their way and stop for the turn." + (" They can't attack that turn either." if l > 1 else "")
+		"oathstone": return "The bond between the Dark Lord and his Squire reaches %d tiles." % oath_range(l) + (" While bonded, a hit on one heals the other %d HP." % oath_heal(l) if l >= 2 else "")
+		"maze": return "Heroes who wander in lose their way and stop for the turn." + (" They can't attack that turn either." if l > 1 else "") + (" They also take %d damage." % maze_dmg(l) if l >= 3 else "")
 		"shrine": return "Holy heroes inside lose their holy bonus and take %d damage a turn. Clerics can't heal in here." % l
-		"stitching": return "At dawn, sew %s that died last night back together for half its cost." % ("one minion" if l == 1 else "up to two minions")
-		"scrying": return "See tomorrow night's raiders." if l == 1 else "See the raiders of the next two nights."
+		"stitching": return "At dawn, sew %s that died last night back together for half its cost." % ("one minion" if l == 1 else "up to %d minions" % l)
+		"scrying": return ("See tomorrow night's raiders." if l == 1 else "See the raiders of the next %d nights." % l) + (" Foreseen heroes arrive with %d%% less HP." % roundi(scry_shaken(l) * 100) if l >= 3 else "")
 		"ogreden": return "Recruit up to %d ogre%s: 30 HP, slow, hits for 6. Good for plugging a doorway." % [l, "s" if l > 1 else ""]
 		"library": return "Your spells deal +%d damage." % (l * 2)
-		"manawell": return "Your spells recharge %d turn%s faster." % [l, "s" if l > 1 else ""]
-		"phylactery": return "Once per fight, when you die, reform at the altar with %d HP." % [8, 14, 20][l - 1]
+		"manawell": return "Your spells recharge %d turn%s faster." % [l, "s" if l > 1 else ""] + (" Your spells deal +%d damage." % well_dmg(l) if l >= 3 else "")
+		"phylactery": return "Once per fight, when you die, reform at the altar with %d HP." % phylactery_hp(l)
 		"crypt": return "Recruit up to %d vampire spawn. They drink blood too." % (l * 2)
 		"bloodpool": return "Your claws deal +%d damage." % (l * 2)
 		"coffin": return "+%d max HP." % (l * 8)
 		"graveyard": return "Recruit up to %d skeletons. Cheap and plentiful." % (l * 3)
 		"boneforge": return "All your undead get +%d HP and +%d damage." % [l * 2, l]
-		"soulcage": return "Raise Dead recharges 1 turn faster." if l == 1 else "Raise Dead recharges faster and raises two skeletons."
+		"soulcage": return "Raise Dead recharges 1 turn faster." if l == 1 else "Raise Dead recharges faster and raises %d skeletons." % soul_skeletons(l)
 		"thrallpens": return "Recruit up to %d brainwashed thralls." % (l * 2)
 		"brainjars": return "Psychic Lash deals +%d damage." % (l * 2)
-		"amplifier": return "Dominate recharges 1 turn faster." if l == 1 else "Dominate recharges faster and works on bosses."
+		"amplifier": return ("Dominate recharges 1 turn faster." if l == 1 else "Dominate recharges faster and works on bosses.") + (" Your thralls deal +%d damage." % amp_dmg(l) if l >= 3 else "")
 		"clockwork": return "All your traps deal +%d damage." % (l * 2)
 		"snareden": return "Unlocks snares. +%d trap slots." % (l * 3)
 		"runes": return "Unlocks blast runes (%d damage in 3x3). +%d trap slots." % [6 + l * 3, l * 2]

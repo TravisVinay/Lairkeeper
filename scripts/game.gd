@@ -13,6 +13,8 @@ const BH := SH * RS          # tile rows per floor
 const FLOOR_SLOTS := SW * SH
 ## Nights between boss nights; Restless Crusade makes it 4. See boss_every().
 const BOSS_EVERY := 5
+## A dark boon is earned every this many nights survived (not tied to Restless Crusade).
+const BOON_EVERY := 5
 ## Dread modifiers unlock once a run has survived this many nights (that is, reached night 5).
 const MODS_UNLOCK_BEST := 4
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -67,6 +69,8 @@ var sel := -1
 var sel_minion = null
 var trap_mode := ""
 var ent_mode := false
+var decor_room := -1      # room whose furniture is being rearranged, or -1
+var decor_pick = null     # tile of the piece picked up in that room
 var _uid := 0
 ## The tutorial step this run is on, or -1 for a normal run. Saved with the run.
 var tut := -1
@@ -164,6 +168,8 @@ func load_run() -> bool:
 	sel_minion = null
 	trap_mode = ""
 	ent_mode = false
+	decor_room = -1
+	decor_pick = null
 	rebuild_objs()
 	changed.emit()
 	logged.emit()
@@ -193,7 +199,7 @@ func new_run(key: String, with_mods := []) -> void:
 	kills = 0
 	logs = []
 	taken = []
-	b = {"atk": 0, "spell": 0, "move": 0, "minion": 0, "feast": 0, "cd": 0, "greed": 0.0, "trap": 0, "hours": 0}
+	b = {"atk": 0, "spell": 0, "move": 0, "minion": 0, "feast": 0, "cd": 0, "greed": 0.0, "trap": 0, "hours": 0, "minion_hp": 0}
 	hours = day_hours()
 	slots = []
 	floors = 0
@@ -211,6 +217,8 @@ func new_run(key: String, with_mods := []) -> void:
 	sel_minion = null
 	trap_mode = ""
 	ent_mode = false
+	decor_room = -1
+	decor_pick = null
 	tut = -1
 	fallen = []
 	party = make_party(1)
@@ -253,20 +261,52 @@ func kill_gold(base: int) -> int:
 	return maxi(1, g / 2) if has_mod("lean") else g
 
 
+## Hero HP multiplier for night d. Gentle early, curving upward so the real ramp lands around nights 15-20.
+static func hero_hp_mult(d: int) -> float:
+	var n := d - 1
+	return 1.0 + 0.07 * n + 0.005 * n * n
+
+## Flat attack bonus heroes get on night d: none through night 5, then +1 every 3 nights,
+## plus an extra +1 every 3 nights past night 12.
+static func hero_atk_bonus(d: int) -> int:
+	return maxi(0, d - 5) / 3 + maxi(0, d - 12) / 3
+
+static func party_size(d: int) -> int:
+	return mini(9, 3 + int(d * 0.45) + maxi(0, d - 12) / 4)
+
+## The first night each hero type can join a raid. Night 1 is all peasants; nights 2-5 add archers
+## (plus the boss); after that, one or two new types turn up every night or so.
+const HERO_ARRIVALS := {"peasant": 1, "archer": 2, "rogue": 6, "knight": 7, "cleric": 8, "sapper": 8, "mage": 9, "barbarian": 11}
+
+## How likely a hero type is on night d. Peasants fade out by night 13; archers start rare on
+## night 2 (about 1 in 8) and grow common; every later type starts rare and becomes common over four nights.
+static func hero_weight(k: String, d: int) -> float:
+	if d < HERO_ARRIVALS[k]:
+		return 0.0
+	match k:
+		"peasant": return maxf(0.0, 4.0 - 0.35 * (d - 1))
+		"archer": return minf(2.0, 0.5 + 0.3 * (d - 2))
+	return minf(3.0, 1.0 + 0.5 * (d - HERO_ARRIVALS[k]))
+
+static func pick_hero(d: int) -> String:
+	var total := 0.0
+	for k in HERO_ARRIVALS:
+		total += hero_weight(k, d)
+	var r := randf() * total
+	for k in HERO_ARRIVALS:
+		r -= hero_weight(k, d)
+		if r < 0.0:
+			return k
+	return "archer"
+
 func make_party(d: int) -> Array:
-	var size: int = mini(9, 3 + int(d * 0.6))
-	var pool := ["peasant", "peasant", "peasant"]
-	if d >= 2: pool += ["rogue", "archer"]
-	if d >= 3: pool += ["knight", "sapper"]
-	if d >= 4: pool += ["cleric"]
-	if d >= 6: pool += ["mage", "barbarian", "knight"]
-	if d >= 8: pool = pool.slice(3)
+	var size: int = party_size(d)
 	var list := []
 	for i in size:
-		list.append(pool.pick_random())
+		list.append(pick_hero(d))
 	if is_boss_night(d): list[0] = "paladin"
 	if is_boss_night(d) and d % (boss_every() * 2) == 0 and list.size() > 1: list[1] = "paladin"
-	if has_mod("crowded"): list.append(pool.pick_random())
+	if has_mod("crowded"): list.append(pick_hero(d))
 	return list
 
 
@@ -358,6 +398,13 @@ func wall_between(a: Vector2i, c: Vector2i) -> bool:
 func can_step(a: Vector2i, c: Vector2i) -> bool:
 	return is_open(a) and is_open(c) and not wall_between(a, c)
 
+## Like can_step, but pretends every breakable piece of furniture is already smashed.
+func can_step_thru(a: Vector2i, c: Vector2i) -> bool:
+	return _passable(a) and _passable(c) and not wall_between(a, c)
+
+func _passable(p: Vector2i) -> bool:
+	return is_floor(p) and (not blocked(p) or breakable(p))
+
 func los(a: Vector2i, c: Vector2i) -> bool:
 	var n: int = maxi(1, man(a, c) * 3)
 	var p := a
@@ -379,8 +426,9 @@ func los(a: Vector2i, c: Vector2i) -> bool:
 func in_range(a: Vector2i, c: Vector2i, r: int) -> bool:
 	return man(a, c) <= r and los(a, c)
 
-## Walking distance from every source tile to every reachable tile.
-func field(srcs: Array) -> Dictionary:
+## Walking distance from every source tile to every reachable tile. With thru, breakable
+## furniture counts as open floor, which is how heroes judge what to smash.
+func field(srcs: Array, thru := false) -> Dictionary:
 	var F := {}
 	var q := []
 	for s in srcs:
@@ -391,7 +439,7 @@ func field(srcs: Array) -> Dictionary:
 	while i < q.size():
 		var c: Vector2i = q[i]
 		i += 1
-		for n in steps(c):
+		for n in steps(c, thru):
 			if F.has(n):
 				continue
 			F[n] = F[c] + 1
@@ -399,13 +447,13 @@ func field(srcs: Array) -> Dictionary:
 	return F
 
 ## Tiles a unit standing on p can walk to in one step, including taking the stairs.
-func steps(p: Vector2i) -> Array:
+func steps(p: Vector2i, thru := false) -> Array:
 	var o := []
 	for d in DIRS:
 		var n: Vector2i = p + d
-		if can_step(p, n):
+		if can_step_thru(p, n) if thru else can_step(p, n):
 			o.append(n)
-	if stairs_shut <= 0 and links.has(p) and is_open(links[p]):
+	if stairs_shut <= 0 and links.has(p) and (_passable(links[p]) if thru else is_open(links[p])):
 		o.append(links[p])
 	return o
 
@@ -422,16 +470,32 @@ func slot_neighbors(si: int) -> Array:
 	if row < SH - 1: o.append(si + SW)
 	return o
 
+## A built room's own furniture, as [x, y, kind, blocks, broken] in room-local tiles. Copied
+## from the room's blueprint the first time it's needed, so each room can move and lose pieces.
+func room_objs(si: int) -> Array:
+	var s: Dictionary = slots[si]
+	if not s.has("objs"):
+		var out := []
+		for e in Data.ROOMS[s.type].objs:
+			out.append([e[0], e[1], e[2], e.size() > 3 and e[3] == 1, false])
+		s.objs = out
+	return s.objs
+
 func rebuild_objs() -> void:
 	obj = {}
 	for si in slots.size():
 		var s: Dictionary = slots[si]
 		if s.state == "rock":
 			continue
-		var objs: Array = Data.ROOMS[s.type].objs if s.state == "built" else Data.EMPTY_OBJS
 		var o := slot_xy(si) * RS
-		for e in objs:
-			obj[o + Vector2i(e[0], e[1])] = {"kind": e[2], "block": e.size() > 3 and e[3] == 1}
+		if s.state != "built":
+			for e in Data.EMPTY_OBJS:
+				obj[o + Vector2i(e[0], e[1])] = {"kind": e[2], "block": false}
+			continue
+		var objs := room_objs(si)
+		for i in objs.size():
+			var e: Array = objs[i]
+			obj[o + Vector2i(e[0], e[1])] = {"kind": "rubble" if e[4] else e[2], "block": e[3] and not e[4], "si": si, "i": i, "broken": e[4]}
 	# stairs: the center of each Stairs Up room links to the center of the same slot one floor up
 	links = {}
 	for si in slots.size():
@@ -568,9 +632,11 @@ func build(si: int, t: String) -> void:
 func upgrade(si: int) -> void:
 	var s: Dictionary = slots[si]
 	var R: Dictionary = Data.ROOMS[s.type]
-	if s.lvl >= R.cost.size() or not guard("upgrade:%d" % si) or not spend(R.cost[s.lvl]):
+	if not guard("upgrade:%d" % si) or not spend(Data.room_cost(s.type, s.lvl)):
 		return
 	s.lvl += 1
+	if s.type == "scrying":
+		_fill_future()
 	var hp := 6 if s.type == "lair" else (8 if s.type == "coffin" else 0)
 	mmax += hp
 	mhp += hp
@@ -784,6 +850,14 @@ func recruit(kind: String) -> void:
 	if add_minion(kind):
 		gold -= c
 		add_log("A %s answers your call." % Data.UNITS[kind].name.to_lower())
+		# hand the new recruit straight to the player to post (the tutorial keeps its scripted flow)
+		if not gate.is_valid():
+			sel_minion = minions.back()
+			trap_mode = ""
+			ent_mode = false
+			decor_room = -1
+			decor_pick = null
+			tip("Click an open tile to post your new %s, or press Esc to leave it where it stands." % Data.UNITS[kind].name.to_lower())
 	changed.emit()
 
 func fix_posts() -> void:
@@ -810,6 +884,9 @@ func day_click(p: Vector2i) -> void:
 	if trap_mode != "":
 		place_trap(p)
 		return
+	if decor_room >= 0:
+		decor_click(p)
+		return
 	if sel_minion != null:
 		var m = sel_minion
 		sel_minion = null
@@ -829,7 +906,102 @@ func day_click(p: Vector2i) -> void:
 	changed.emit()
 
 
+# ---------------------------------------------------------------- furniture
+
+## A blocking piece of room furniture that heroes can smash.
+func breakable(p: Vector2i) -> bool:
+	return obj.has(p) and obj[p].block and obj[p].has("si") and not obj[p].kind in Data.FIXED_DECOR
+
+## A piece in the room being rearranged that can be picked up.
+func decor_movable(p: Vector2i) -> bool:
+	return decor_room >= 0 and obj.has(p) and obj[p].get("si", -1) == decor_room and not obj[p].broken \
+		and not obj[p].kind in Data.FIXED_DECOR
+
+## An empty tile in the room being rearranged where a piece can be set down.
+func decor_spot_ok(p: Vector2i) -> bool:
+	return decor_room >= 0 and in_b(p) and slot_of(p) == decor_room and not obj.has(p) and not traps.has(p) \
+		and p != entrance and p != monster_start() and not (duo() and p == squire_start()) \
+		and minion_at(p) == null and not links.has(p)
+
+func toggle_decor(si: int) -> void:
+	if decor_room == si:
+		decor_room = -1
+		decor_pick = null
+		changed.emit()
+		return
+	if not guard("decor"):
+		return
+	decor_room = si
+	decor_pick = null
+	sel_minion = null
+	trap_mode = ""
+	ent_mode = false
+	tip("Click a piece of furniture to pick it up, then an empty tile in the room to set it down.")
+	changed.emit()
+
+func decor_click(p: Vector2i) -> void:
+	if not in_b(p) or slot_of(p) != decor_room:
+		decor_room = -1
+		decor_pick = null
+		sel = slot_of(p) if in_b(p) else sel
+		changed.emit()
+		return
+	if decor_movable(p):
+		decor_pick = null if decor_pick == p else p
+	elif obj.has(p) and obj[p].get("broken", false):
+		tip("That piece is smashed. Repair this room's furniture first.", true)
+	elif decor_pick != null:
+		if decor_spot_ok(p):
+			move_decor(decor_pick, p)
+			decor_pick = null
+		else:
+			tip("Furniture goes on empty floor in this room: not on traps, guard posts, the throne or the entrance.", true)
+	else:
+		tip("Click a piece of furniture to pick it up.", true)
+	changed.emit()
+
+func move_decor(from: Vector2i, to: Vector2i) -> void:
+	var o: Dictionary = obj[from]
+	var e: Array = room_objs(o.si)[o.i]
+	var base := slot_xy(o.si) * RS
+	e[0] = to.x - base.x
+	e[1] = to.y - base.y
+	_layout_changed()
+
+## Heroes broke a piece: it becomes rubble until repaired.
+func break_decor(p: Vector2i) -> void:
+	var o: Dictionary = obj[p]
+	room_objs(o.si)[o.i][4] = true
+	rebuild_objs()
+
+func broken_count(si: int) -> int:
+	var n := 0
+	if slots[si].state == "built":
+		for e in room_objs(si):
+			if e[4]:
+				n += 1
+	return n
+
+func repair_room(si: int) -> void:
+	var c := broken_count(si) * Data.DECOR_REPAIR
+	if c == 0 or not guard("decor") or not spend(c, 0):
+		return
+	for e in room_objs(si):
+		e[4] = false
+	add_log("Your servants rebuild the smashed furniture in the %s." % Data.ROOMS[slots[si].type].name)
+	_layout_changed()
+
+
 # ---------------------------------------------------------------- boons and dawn
+
+## Whether surviving night d earns a dark boon.
+func boon_due(d: int) -> bool:
+	return not has_mod("godless") and d % BOON_EVERY == 0
+
+## The next boon night: tonight or later by day, and always a later night on the
+## after-battle screen (which only asks when tonight wasn't one).
+func next_boon_night() -> int:
+	return ceili(day / float(BOON_EVERY)) * BOON_EVERY
 
 func boon_ok(id: String) -> bool:
 	match id:
@@ -840,20 +1012,30 @@ func boon_ok(id: String) -> bool:
 func apply_boon(id: String) -> void:
 	match id:
 		"hide":
-			mmax += 6
-			mhp = mini(mmax, mhp + 6)
-			smax += 6 if duo() else 0
-			shp = mini(smax, shp + 6)
-		"claws": b.atk += 2
-		"surge": b.spell += 2
-		"swift": b.move += 1
-		"pack": b.minion += 1
-		"feast": b.feast += 3
-		"rituals": b.cd += 1
-		"greed": b.greed += 0.5
-		"jagged": b.trap += 3
-		"owl": b.hours += 1
-		"press": add_minion("goblin", true)
+			mmax += 20
+			mhp = mmax
+			if duo():
+				smax += 20
+				shp = smax
+		"claws": b.atk += 5
+		"surge": b.spell += 5
+		"swift": b.move += 2
+		"pack":
+			b.minion += 2
+			b.minion_hp = b.get("minion_hp", 0) + 5
+		"feast": b.feast += 8
+		"rituals":
+			b.cd += 1
+			b.spell += 2
+		"greed": b.greed += 1.0
+		"jagged": b.trap += 8
+		"owl":
+			b.hours += 1
+			gold += 50
+		"press":
+			add_minion("ogre", true)
+			add_minion("goblin", true)
+			add_minion("goblin", true)
 
 func boon_choices() -> Array:
 	var avail := []
@@ -871,8 +1053,8 @@ func dawn(boon: Dictionary) -> void:
 	if not boon.is_empty():
 		apply_boon(boon.id)
 		taken.append(boon.name)
-	var tg: int = [0, 12, 20, 30][lvl("treasury")]
-	var heal: int = [0, 6, 10, 15][lvl("larder")]
+	var tg := Data.treasury_gold(lvl("treasury"))
+	var heal := Data.larder_heal(lvl("larder"))
 	var tribute := 5 if has_mod("lean") else 10
 	if has_mod("norest"):
 		heal = 0
@@ -881,12 +1063,16 @@ func dawn(boon: Dictionary) -> void:
 	shp = mini(smax, shp + heal)
 	hours = day_hours()
 	party = future.pop_front() if future.size() > 0 else make_party(day)
-	while future.size() < 2:
-		future.append(make_party(day + future.size() + 1))
+	_fill_future()
 	_stitch()
 	add_log("Dawn of day %d. Terrified villagers leave %d gold at the cave mouth.%s%s" % [day, tribute,
 		(" Treasury: +%d gold." % tg) if tg > 0 else "", (" Larder: +%d HP." % heal) if heal > 0 else ""], "info")
 	changed.emit()
+
+## Keep enough upcoming raiding parties rolled for the Scrying Pool to show.
+func _fill_future() -> void:
+	while future.size() < maxi(2, lvl("scrying")):
+		future.append(make_party(day + future.size() + 1))
 
 ## Stitching Room: brings back minions lost last night for half their cost, if there is room.
 func _stitch() -> void:

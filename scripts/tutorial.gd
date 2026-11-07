@@ -90,6 +90,8 @@ func _enter() -> void:
 	Game.trap_mode = ""
 	Game.ent_mode = false
 	Game.sel_minion = null
+	Game.decor_room = -1
+	Game.decor_pick = null
 	if s.has("party"):
 		Game.party = PARTIES[s.party].duplicate()
 	if s.has("need"):
@@ -187,8 +189,11 @@ func _nightfall(text: String) -> Dictionary:
 
 func _boon(day: int) -> Dictionary:
 	return {"title": "Choose a dark boon", "night": true, "boon": true,
-		"text": "Every night you survive earns a boon. It lasts for the rest of the run.",
+		"text": "Every fifth night you survive earns a dark boon: a big, permanent power-up for the rest of the run. Pick one.",
 		"done": _dawned(day)}
+
+func _greet(day: int, text := "Night survived. Press Greet the dawn to start the next day.") -> Dictionary:
+	return {"title": "Greet the dawn", "night": true, "boon": true, "text": text, "done": _dawned(day)}
 
 func _lay_spikes() -> void:
 	Game.trap_mode = "spikes"
@@ -209,7 +214,7 @@ func _make_steps() -> Array:
 		{"title": "Build a barracks", "slot": 7, "allow": ["build:7:barracks"], "need": 25,
 			"text": "Click the empty chamber just above your lair, then choose Goblin Barracks in the panel. Every build takes 1 of your 3 daily hours, plus gold.",
 			"done": _built(7, "barracks"), "act": func(): Game.build(7, "barracks")},
-		{"title": "Recruit a goblin", "slot": 7, "sel": 7, "allow": ["recruit:goblin"], "need": 15,
+		{"title": "Recruit a goblin", "slot": 7, "sel": 7, "allow": ["recruit:goblin"], "need": 12,
 			"text": "With the barracks selected, click Recruit goblin. Minions cost gold but no time, and fight beside you every night. If they die, they stay dead.",
 			"done": func(): return Game.count_of("goblin") >= 1, "act": func(): Game.recruit("goblin")},
 		{"title": "Post your goblin", "slot": 2,
@@ -237,7 +242,7 @@ func _make_steps() -> Array:
 		{"title": "Attack", "night": true,
 			"text": "A hero ringed in red is in reach of your selected unit: click it to attack. Your claws drink a third of the damage they deal back as health. Kill every hero to win the night.",
 			"done": _won_night},
-		_boon(2),
+		_greet(2, "Night survived. Every fifth night you survive also earns a dark boon, a big permanent power-up. For now, press Greet the dawn."),
 
 		# ---- day 2: traps and upgrades
 		{"title": "Dawn", "party": 1, "next": "Next",
@@ -261,13 +266,13 @@ func _make_steps() -> Array:
 		{"title": "Mind the archer", "night": true,
 			"text": "Watch the heroes walk over your spikes. Keep out of the archer's line of fire, and close in from behind a wall or a corner.",
 			"done": _won_night},
-		_boon(3),
+		_greet(3),
 
 		# ---- day 3: signature room, more minions, healing
 		{"title": "Your own rooms", "slot": 11, "party": 2, "allow": ["build:11:crypt"], "need": 35,
 			"text": "Each monster has signature rooms only it can build. Click the chamber left of your lair and build a Crypt of Brides. It houses vampire spawn, minions that drink blood like you.",
 			"done": _built(11, "crypt"), "act": func(): Game.build(11, "crypt")},
-		{"title": "Recruit vampire spawn", "slot": 11, "sel": 11, "allow": ["recruit:spawn"], "need": 30,
+		{"title": "Recruit vampire spawn", "slot": 11, "sel": 11, "allow": ["recruit:spawn"], "need": 24,
 			"text": "With the crypt selected, recruit a vampire spawn.",
 			"done": func(): return Game.count_of("spawn") >= 1, "act": func(): Game.recruit("spawn")},
 		{"title": "Build a Larder", "slot": 8, "allow": ["build:8:larder"], "need": 20,
@@ -276,7 +281,7 @@ func _make_steps() -> Array:
 		{"title": "Grow the barracks", "slot": 7, "sel": 7, "allow": ["upgrade:7"], "need": 40,
 			"text": "Click the Goblin Barracks and upgrade it. Level 2 houses 4 goblins.",
 			"done": func(): return Game.lvl("barracks") >= 2, "act": func(): Game.upgrade(7)},
-		{"title": "One more goblin", "slot": 7, "sel": 7, "allow": ["recruit:goblin"], "need": 15,
+		{"title": "One more goblin", "slot": 7, "sel": 7, "allow": ["recruit:goblin"], "need": 12,
 			"text": "Recruit another goblin. Minions that died in earlier nights are gone for good, so keep your ranks filled.",
 			"done": func(): return Game.count_of("goblin") > _goblins, "act": func(): Game.recruit("goblin")},
 		_nightfall("A rogue comes tonight. Rogues spot traps and step around them, so your minions will have to catch it."),
@@ -289,7 +294,7 @@ func _make_steps() -> Array:
 			"text": "Press 1 for Bat Form to fly to any empty tile within 5, even past walls. It doesn't use up your attack, so fly in and strike in the same turn.",
 			"done": func(): return _won_night() or (_fighting() and (_b().mon.cds.get("bats", 0) > 0 or _b().turn >= 8))},
 		{"title": "Finish them", "night": true, "text": "Kill every hero to win the night.", "done": _won_night},
-		_boon(4),
+		_greet(4),
 
 		# ---- day 4: snares, then a free choice
 		{"title": "Snares", "slot": 6, "party": 3, "allow": ["upgrade:6"], "need": 40,
@@ -307,7 +312,7 @@ func _make_steps() -> Array:
 		{"title": "Crack the knight", "night": true,
 			"text": "Armor takes 1 off every hit, so your claws hurt the knight far more than goblin jabs do. Let your minions hold it while you strike.",
 			"done": _won_night},
-		_boon(5),
+		_greet(5),
 
 		# ---- day 5: the boss
 		{"title": "Boss night", "party": 4, "next": "Next",

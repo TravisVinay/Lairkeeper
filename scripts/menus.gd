@@ -178,7 +178,7 @@ func render_catalog() -> void:
 	souls.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	head.add_child(souls)
 	head.move_child(souls, 1)
-	var how := "Every build or upgrade takes 1 hour. Each room type can be built once per floor."
+	var how := "Every build or upgrade takes 1 hour. Each room type can be built once per floor. Rearrange a room's furniture to wall off paths; heroes who can't reach you smash through it."
 	if ui.in_run:
 		how += " Unlock new rooms from the title screen between runs."
 	else:
@@ -256,9 +256,11 @@ func _room_entry(t: String) -> Control:
 			costs.append("Built from the start" if R.get("fixed", false) else "Build %dg" % R.cost[0])
 		else:
 			costs.append("Lv %d: %dg" % [l + 1, R.cost[l]])
+	costs.append("then +40% a level, no cap")
 	v.add_child(ui.lbl(" · ".join(costs), 13, "#e4a648"))
-	for l in range(1, R.cost.size() + 1):
+	for l in range(1, maxi(R.cost.size(), 3) + 2):
 		v.add_child(ui.lbl("Lv %d  %s" % [l, Data.room_eff(t, l)], 13, "#ede3cd" if l == 1 else "#b3a59b"))
+	v.add_child(ui.lbl("…and it keeps growing with every level after.", 13, "#8a7f90"))
 	if R.has("recruit"):
 		var U: Dictionary = Data.UNITS[R.recruit]
 		v.add_child(ui.lbl("%s: %d HP, hits for %d, moves %d. %dg each." % [U.name, U.hp, U.atk, U.move, U.cost], 13, "#a7998f"))
@@ -311,7 +313,7 @@ func render_stats() -> void:
 			c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(c)
 	if Game.duo():
-		v.add_child(ui.lbl("Bond: within %d tiles of each other, both deal +1 damage and the Dark Lord's spells recharge 1 turn faster." % (5 if Game.lvl("oathstone") > 0 else 3), 14, "#b89cff"))
+		v.add_child(ui.lbl("Bond: within %d tiles of each other, both deal +1 damage and the Dark Lord's spells recharge 1 turn faster." % Data.oath_range(Game.lvl("oathstone")), 14, "#b89cff"))
 	v.add_child(ui.h3("Dark boons"))
 	v.add_child(ui.lbl(", ".join(Game.taken) if Game.taken.size() > 0 else "None yet. Survive a night to earn one.", 14, "#c9a7ff" if Game.taken.size() > 0 else "#a7998f"))
 	if Game.mods.size() > 0:
@@ -528,10 +530,12 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	elif ui.battle != null and (ui.battle.sel != null or ui.hud.inspect != null or ui.battle.mode != ""):
 		return   # let the fight's Esc deselect first
-	elif ui.battle == null and (Game.trap_mode != "" or Game.ent_mode or Game.sel_minion != null):
+	elif ui.battle == null and (Game.trap_mode != "" or Game.ent_mode or Game.sel_minion != null or Game.decor_room >= 0):
 		Game.trap_mode = ""
 		Game.ent_mode = false
 		Game.sel_minion = null
+		Game.decor_room = -1
+		Game.decor_pick = null
 		ui.refresh()
 	else:
 		open_pause()
