@@ -27,7 +27,6 @@ var bbar: HBoxContainer
 var turn_lbl: Label
 var main_btn: Button
 var zoom_row: HBoxContainer
-var floor_tabs: HBoxContainer
 var tip_lbl: Label
 var subtitle: Label
 var stat_vals := {}
@@ -35,6 +34,7 @@ var stat_vals := {}
 var revive_box: VBoxContainer   # buy back a fallen duo member
 var room_box: VBoxContainer
 var layout_box: VBoxContainer
+var arrange_box: VBoxContainer
 var trap_box: VBoxContainer
 var minion_box: VBoxContainer
 var party_box: VBoxContainer
@@ -241,7 +241,7 @@ func _build() -> void:
 	tbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(tbox)
 	tbox.add_child(title("Lairkeeper", "#e4a648", 40))
-	subtitle = lbl("Dig by day. Feast by night.", 15, "#a7998f")
+	subtitle = lbl("Build by day. Feast by night.", 15, "#a7998f")
 	tbox.add_child(subtitle)
 	var stats := HBoxContainer.new()
 	stats.add_theme_constant_override("separation", 8)
@@ -280,9 +280,6 @@ func _build() -> void:
 	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	left.size_flags_stretch_ratio = 3.0
 	body.add_child(left)
-	floor_tabs = HBoxContainer.new()
-	floor_tabs.add_theme_constant_override("separation", 6)
-	left.add_child(floor_tabs)
 	var frame := PanelContainer.new()
 	frame.add_theme_stylebox_override("panel", _box("#0e0b10", "#463a4e", 8, 2))
 	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -293,7 +290,6 @@ func _build() -> void:
 	board.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	board.tile_clicked.connect(_on_tile_clicked)
 	board.tile_hovered.connect(_on_tile_hovered)
-	board.floor_changed.connect(func(_f): render_floor_tabs())
 	frame.add_child(board)
 	hud = HudScript.new()
 	frame.add_child(hud)
@@ -345,6 +341,7 @@ func _build() -> void:
 
 	revive_box = panel(day_box)
 	room_box = panel(day_box)
+	arrange_box = panel(day_box)
 	layout_box = panel(day_box)
 	trap_box = panel(day_box)
 	minion_box = panel(day_box)
@@ -426,7 +423,7 @@ func apply_layout() -> void:
 # ---------------------------------------------------------------- refresh
 
 func refresh() -> void:
-	stat_vals.day.text = str(Game.day)
+	stat_vals.day.text = "%d/%d" % [Game.day, Game.WIN_NIGHT]
 	stat_vals.hours.text = str(Game.hours)
 	stat_vals.gold.text = str(Game.gold)
 	if Game.duo():
@@ -447,11 +444,11 @@ func refresh() -> void:
 		turn_lbl.text = "Day %d · out of time, let night fall" % Game.day if out_of_time else "Day %d · %d hour%s left" % [Game.day, Game.hours, "" if Game.hours == 1 else "s"]
 		render_revive_panel()
 		render_room_panel()
+		render_arrange_panel()
 		render_layout_panel()
 		render_trap_panel()
 		render_minion_panel()
 		render_party()
-	render_floor_tabs()
 	render_logs()
 	if menus.pause_ov.visible:
 		menus.render_pause()   # Quit unlocks once the heroes finish moving
@@ -460,37 +457,12 @@ func _autosave() -> void:
 	if in_run and battle == null:
 		Game.save_run()
 
-## One tab per floor. At night each tab also counts the heroes on that floor.
-func render_floor_tabs() -> void:
-	clear(floor_tabs)
-	floor_tabs.visible = Game.floors > 1
-	for f in Game.floors:
-		var heroes := 0
-		if battle:
-			for u in battle.alive("h"):
-				if Game.floor_of(u.pos) == f:
-					heroes += 1
-		var lair := Game.floor_of_slot(Game.slot_idx("lair")) == f
-		var t := "Ground floor" if f == 0 else "Floor %d" % (f + 1)
-		if lair: t += " · lair"
-		if heroes > 0: t += " · %d hero%s" % [heroes, "es" if heroes > 1 else ""]
-		var b := Button.new()
-		b.text = t
-		b.theme_type_variation = "GhostButton"
-		b.toggle_mode = true
-		b.button_pressed = board.shown_floor == f
-		b.pressed.connect(_show_floor.bind(f))
-		floor_tabs.add_child(b)
-
-func _show_floor(f: int) -> void:
-	board.show_floor(f)
-	render_floor_tabs()
-
 func render_logs() -> void:
 	var cols := {"kill": "#ede3cd", "bad": "#ff9a8a", "info": "#c9a7ff", "": "#a7998f"}
 	var t := ""
 	for l in Game.logs:
-		t += "[color=%s]%s[/color]\n" % [cols.get(l.kind, "#a7998f"), l.msg]
+		t += "[color=%s]%s[/color]
+" % [cols.get(l.kind, "#a7998f"), l.msg]
 	for r in log_labels:
 		r.text = t
 	hud.set_log(Game.logs)
@@ -519,68 +491,40 @@ func render_room_panel() -> void:
 	if i < 0:
 		room_box.add_child(h3("Your dungeon"))
 		room_box.add_child(title("Pick a chamber"))
-		room_box.add_child(lbl("Click any room on the map to dig, build or upgrade.", 15, "#a7998f"))
+		room_box.add_child(lbl("Click any chamber on the map to build or upgrade.", 15, "#a7998f"))
 		return
 	var s: Dictionary = Game.slots[i]
 	if s.state == "rock":
 		room_box.add_child(h3("Selected"))
-		var ground := Game.floor_of_slot(i) == 0
-		room_box.add_child(title("Solid rock" if ground else "Open air"))
-		if Game.diggable(i):
-			room_box.add_child(lbl(("Dig out" if ground else "Build out") + " a new 5x5 chamber. Each one costs a little more.", 15, "#a7998f"))
-			room_box.add_child(opt("Dig chamber" if ground else "Build chamber", "1h · %dg" % Game.dig_cost(), "", func(): Game.dig(i), Game.hours < 1 or Game.gold < Game.dig_cost() or not Game.allowed("dig:%d" % i)))
+		room_box.add_child(title("Solid rock"))
+		if Game.can_open(i):
+			room_box.add_child(lbl("Build a room straight into the rock.", 15, "#a7998f"))
+			_render_build_list(i)
 		else:
-			room_box.add_child(lbl("Open up a chamber next to it first.", 15, "#a7998f"))
+			room_box.add_child(lbl("Build next to one of your rooms first.", 15, "#a7998f"))
 	elif s.state == "dug":
 		room_box.add_child(h3("Selected"))
 		room_box.add_child(title("Empty chamber"))
 		room_box.add_child(lbl("Each room can be built once and comes with its own furniture. Some pieces block movement and arrows.", 14, "#a7998f"))
-		var mh := Game.lair_move_hours(i)
-		room_box.add_child(opt("Move your Lair here", "%dh" % mh, "Where your throne sits and every fight starts." + (" Moving to another floor takes a whole day." if mh > 1 else ""),
-			func(): Game.move_lair(i), Game.hours < mh or not Game.allowed("lair")))
-		var sig := []
-		var com := []
-		for t in Data.ROOMS:
-			if t != "stairs" and Game.can_build(t, i):
-				(sig if Data.ROOMS[t].has("owner") else com).append(t)
-		if Game.floor_type_count("stairs", Game.floor_of_slot(i)) == 0:
-			room_box.add_child(h3("Build higher"))
-			var why := Game.stairs_block(i)
-			if why == "":
-				room_box.add_child(_room_opt(i, "stairs"))
-			else:
-				var c: int = Data.ROOMS.stairs.cost[0]
-				room_box.add_child(opt("Stairs Up", "1h · %dg" % c, why, func(): pass, true))
-		if sig.size() > 0:
-			room_box.add_child(lbl(("%s's rooms" % Game.M.name).to_upper(), 12, Game.M.col))
-			for t in sig:
-				room_box.add_child(_room_opt(i, t))
-		if com.size() > 0:
-			room_box.add_child(h3("Common rooms"))
-			for t in com:
-				room_box.add_child(_room_opt(i, t))
-		var locked := Game.locked_rooms_for(Game.mk).size()
-		if locked > 0:
-			room_box.add_child(lbl("%d more room%s can be unlocked with souls between runs." % [locked, "s" if locked > 1 else ""], 13, "#a7998f"))
+		room_box.add_child(opt("Move your throne here", "free", "Where your throne sits and every fight starts. Moving it costs nothing.",
+			func(): Game.move_lair(i), not Game.allowed("lair")))
+		_render_build_list(i)
 	else:
 		var R: Dictionary = Data.ROOMS[s.type]
 		room_box.add_child(h3("Selected · level %d" % s.lvl))
 		room_box.add_child(title(R.name, Game.M.col if s.type == "lair" else R.col))
 		room_box.add_child(lbl(Data.room_eff(s.type, s.lvl), 15))
-		var c := Data.room_cost(s.type, s.lvl)
-		room_box.add_child(opt("Upgrade to level %d" % (s.lvl + 1), "1h · %dg" % c, R.get("next", Data.room_eff(s.type, s.lvl + 1)), func(): Game.upgrade(i), Game.gold < c or Game.hours < 1 or not Game.allowed("upgrade:%d" % i)))
+		if s.lvl < Game.MAX_LVL:
+			var c := Data.room_cost(s.type, s.lvl)
+			room_box.add_child(opt("Upgrade to level %d" % (s.lvl + 1), "1h · %dg" % c, R.get("next", Data.room_eff(s.type, s.lvl + 1)), func(): Game.upgrade(i), Game.gold < c or Game.hours < 1 or not Game.allowed("upgrade:%d" % i)))
+		else:
+			room_box.add_child(lbl("Highest level.", 13, "#8a7f90"))
 		if R.has("recruit"):
 			var k: String = R.recruit
 			var U: Dictionary = Data.UNITS[k]
 			var n := Game.count_of(k)
 			var cap := Game.cap_of(k)
-			room_box.add_child(opt("Recruit %s" % U.name.to_lower(), "%dg" % U.cost, "%d of %d housed · %d HP, hits for %d, moves %d" % [n, cap, U.hp, U.atk, U.move],
-				func(): Game.recruit(k), n >= cap or Game.gold < U.cost or not Game.allowed("recruit:" + k)))
-		var dec_on := Game.decor_room == i
-		room_box.add_child(opt("Done rearranging" if dec_on else "Rearrange furniture", "free",
-			"Click a piece, then an empty tile in this room. Press again when done." if dec_on
-			else "Move this room's furniture. Wall heroes off and they'll smash their way through.",
-			func(): Game.toggle_decor(i), not Game.allowed("decor") and not dec_on, dec_on))
+			room_box.add_child(lbl("%d of %d %s housed · %d HP, hits for %d, moves %d. They come free with the room, and any that die are replaced at dawn." % [n, cap, U.name.to_lower(), U.hp, U.atk, U.move], 13, "#a7998f"))
 		var nb := Game.broken_count(i)
 		if nb > 0:
 			var rc := nb * Data.DECOR_REPAIR
@@ -590,6 +534,25 @@ func render_room_panel() -> void:
 		if not R.get("fixed", false):
 			room_box.add_child(opt("Tear it down", "1h", "No refund. Leaves an empty chamber.", func(): Game.demolish(i), Game.hours < 1 or not Game.allowed("demolish")))
 
+## The rooms that can go in chamber i: the monster's own rooms, then common ones.
+func _render_build_list(i: int) -> void:
+	var sig := []
+	var com := []
+	for t in Data.ROOMS:
+		if Game.can_build(t, i):
+			(sig if Data.ROOMS[t].has("owner") else com).append(t)
+	if sig.size() > 0:
+		room_box.add_child(lbl(("%s's rooms" % Game.M.name).to_upper(), 12, Game.M.col))
+		for t in sig:
+			room_box.add_child(_room_opt(i, t))
+	if com.size() > 0:
+		room_box.add_child(h3("Common rooms"))
+		for t in com:
+			room_box.add_child(_room_opt(i, t))
+	var locked := Game.locked_rooms_for(Game.mk).size()
+	if locked > 0:
+		room_box.add_child(lbl("%d more room%s can be unlocked with souls between runs." % [locked, "s" if locked > 1 else ""], 13, "#a7998f"))
+
 func _room_opt(i: int, t: String) -> Control:
 	var R: Dictionary = Data.ROOMS[t]
 	var c: int = R.cost[0]
@@ -598,19 +561,64 @@ func _room_opt(i: int, t: String) -> Control:
 func render_layout_panel() -> void:
 	clear(layout_box)
 	layout_box.add_child(h3("Entrance"))
-	layout_box.add_child(lbl("Heroes file in through one gate on the outer edge of your dungeon. Put it right next to your lair to fight at once, or far away to make them walk a gauntlet.", 14, "#a7998f"))
+	layout_box.add_child(lbl("Heroes file in through one gate on the outer edge of your dungeon. Put it right next to your throne to fight at once, or far away to make them walk a gauntlet.", 14, "#a7998f"))
 	var on := Game.ent_mode
 	layout_box.add_child(opt("Click an edge tile..." if on else "Move the entrance", "1h",
 		"Glowing tiles are valid. Press again to cancel." if on else "Any open floor tile on the edge of the map.",
 		_toggle_entrance, (Game.hours < 1 or not Game.allowed("entrance")) and not on, on))
+	layout_box.add_child(h3("Expand · %dx%d chambers" % [Game.SW, Game.SH]))
+	layout_box.add_child(lbl("Every boss you beat earns one new row or column of rock, one chamber for each along that side. Expanding past the entrance moves it out to the new edge.", 14, "#a7998f"))
+	var left := Game.expands_left()
+	layout_box.add_child(lbl("%d expansion%s ready." % [left, "" if left == 1 else "s"] if left > 0
+		else "No expansions ready. Beat the boss on night %d to earn one." % Game.next_boss_night(), 14, "#e4a648" if left > 0 else "#8a7f90"))
+	for side in ["n", "s", "w", "e"]:
+		var n := Game.expand_size(side)
+		var c := Game.expand_cost(side)
+		var why := Game.expand_block(side)
+		var nm: String = {"n": "North", "s": "South", "w": "West", "e": "East"}[side]
+		var dv: Vector2i = Game.SIDES[side]
+		var grow := Vector2i(Game.SW, Game.SH) + dv.abs()
+		var desc := why if why != "" else "%d chambers: %dx%d becomes %dx%d.%s" % [n, Game.SW, Game.SH, grow.x, grow.y,
+			" The entrance moves out to the new edge." if Game.entrance_on(side) else ""]
+		layout_box.add_child(opt("Expand %s" % nm, "1h · %dg" % c, desc, _expand.bind(side),
+			why != "" or Game.gold < c or Game.hours < 1 or not Game.allowed("expand")))
+
+func _expand(side: String) -> void:
+	Game.expand(side)
+	board.fit(true)
 
 func _toggle_entrance() -> void:
-	Game.ent_mode = not Game.ent_mode
-	Game.trap_mode = ""
-	Game.sel_minion = null
-	Game.decor_room = -1
-	Game.decor_pick = null
+	var on := Game.ent_mode
+	Game.clear_modes()
+	Game.ent_mode = not on
 	refresh()
+
+## Two buttons that put the map into moving minions or moving furniture, anywhere in the dungeon.
+func render_arrange_panel() -> void:
+	clear(arrange_box)
+	arrange_box.add_child(h3("Arrange"))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	arrange_box.add_child(row)
+	for m in [["minions", "Minions"], ["furniture", "Furniture"]]:
+		var on: bool = Game.arrange == m[0]
+		var b := Button.new()
+		b.text = ("Done" if on else m[1])
+		b.theme_type_variation = "PrimaryButton" if on else "GhostButton"
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.disabled = not on and (m[0] == "minions" and Game.minions.is_empty() or m[0] == "furniture" and not Game.allowed("decor"))
+		b.pressed.connect(func(): Game.toggle_arrange(m[0]))
+		row.add_child(b)
+	var hint := "Move minions' guard posts, or carry furniture from any room to any other. Free, no hours."
+	if Game.arrange == "minions" and Game.sel_minion != null:
+		hint = "Click an open tile for the %s's new post." % Data.UNITS[Game.sel_minion.kind].name.to_lower()
+	elif Game.arrange == "minions":
+		hint = "Click a minion to pick it up. Press Done or Esc when finished."
+	elif Game.arrange == "furniture" and Game.decor_pick != null:
+		hint = "Click an empty tile in any built room to set it down."
+	elif Game.arrange == "furniture":
+		hint = "Click any piece of furniture to pick it up. Press Done or Esc when finished."
+	arrange_box.add_child(lbl(hint, 13, "#a7998f"))
 
 func render_trap_panel() -> void:
 	clear(trap_box)
@@ -620,7 +628,7 @@ func render_trap_panel() -> void:
 			types.append(t)
 	if types.is_empty():
 		trap_box.add_child(h3("Traps"))
-		trap_box.add_child(lbl("Build a Trap Workshop to start laying traps. Traps stay in place for the whole run.", 14, "#a7998f"))
+		trap_box.add_child(lbl("Build a Trap Workshop to start laying traps. Traps stay in place for the whole run. Each fires once a night and re-arms at dawn.", 14, "#a7998f"))
 		return
 	trap_box.add_child(h3("Traps · %d of %d placed" % [Game.traps.size(), Game.trap_cap()]))
 	for t in types:
@@ -629,18 +637,16 @@ func render_trap_panel() -> void:
 	trap_box.add_child(lbl("Click open floor to place. Click a trap to remove it for half its cost. Press the trap type again to stop." if Game.trap_mode != "" else "Pick a trap type, then click the map.", 14, "#a7998f"))
 
 func _toggle_trap(t: String) -> void:
-	Game.trap_mode = "" if Game.trap_mode == t else t
-	Game.sel_minion = null
-	Game.ent_mode = false
-	Game.decor_room = -1
-	Game.decor_pick = null
+	var on := Game.trap_mode == t
+	Game.clear_modes()
+	Game.trap_mode = "" if on else t
 	refresh()
 
 func render_minion_panel() -> void:
 	clear(minion_box)
 	if Game.minions.is_empty():
 		minion_box.add_child(h3("Minions"))
-		minion_box.add_child(lbl("Recruit minions in rooms like the Goblin Barracks. They guard their post every night. If they die, they stay dead.", 14, "#a7998f"))
+		minion_box.add_child(lbl("Rooms like the Goblin Barracks come with their own minions, free. They guard their post every night, and any that die are replaced at dawn.", 14, "#a7998f"))
 		return
 	var counts := {}
 	for m in Game.minions:
@@ -658,15 +664,21 @@ func render_party() -> void:
 	var names := []
 	for k in Game.party:
 		names.append(Data.UNITS[k].name)
+	if Game.is_company(Game.day):
+		party_box.add_child(lbl(Game.company_name(Game.party), 16, "#e4a648"))
 	party_box.add_child(lbl(", ".join(names), 16, "#ede3cd"))
-	party_box.add_child(lbl("They file in through your entrance a few at a time and hunt for you.", 14, "#a7998f"))
+	party_box.add_child(lbl("A seasoned adventuring company: fewer than the village mobs, but every one of them is a veteran." if Game.is_company(Game.day)
+		else "They file in through your entrance a few at a time and hunt for you.", 14, "#a7998f"))
 	# the Scrying Pool shows the raiders still to come
 	var sees := mini(Game.lvl("scrying"), Game.future.size())
 	for n in sees:
 		var fn := []
 		for k in Game.future[n]:
 			fn.append(Data.UNITS[k].name)
-		party_box.add_child(lbl("%s: %s" % ["Tomorrow" if n == 0 else "In %d nights" % (n + 1), ", ".join(fn)], 14, "#5fa8c8"))
+		var who := ", ".join(fn)
+		if Game.is_company(Game.day + n + 1):
+			who = "%s (%s)" % [Game.company_name(Game.future[n]), who]
+		party_box.add_child(lbl("%s: %s" % ["Tomorrow" if n == 0 else "In %d nights" % (n + 1), who], 14, "#5fa8c8"))
 	clear(boon_box)
 	boon_box.add_child(h3("Dark boons"))
 	boon_box.add_child(lbl(", ".join(Game.taken) if Game.taken.size() > 0 else "None yet.", 15, "#c9a7ff" if Game.taken.size() > 0 else "#a7998f"))
@@ -732,8 +744,7 @@ func _toggle_fit() -> void:
 	if not board.zoomed_out():
 		board.fit()
 	elif battle:
-		var p: Vector2i = battle.lead().pos if Game.floor_of(battle.lead().pos) == board.shown_floor else Vector2i(Game.BW / 2, board.shown_floor * Game.BH + Game.BH / 2)
-		board.look_at_tile(p, board.night_z())
+		board.look_at_tile(battle.lead().pos, board.night_z())
 
 func _unhandled_input(e: InputEvent) -> void:
 	if battle == null or battle.over or pick_ov.visible or over_ov.visible or menus.is_open():
@@ -746,6 +757,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_A, KEY_LEFT: board.pan(Vector2(-2, 0))
 		KEY_D, KEY_RIGHT: board.pan(Vector2(2, 0))
 		KEY_E: battle.enemy_turn()
+		KEY_Q: battle.auto_minions()
 		KEY_F:
 			if battle.sel != null and battle.sel.side == "p":
 				battle.finish_unit(battle.sel)
@@ -779,7 +791,6 @@ func start_night() -> void:
 	apply_layout()
 	battle.start()
 	await get_tree().process_frame
-	board.show_floor(Game.floor_of(battle.lead().pos))
 	board.look_at_tile(battle.lead().pos, board.night_z())
 	refresh()
 
@@ -794,13 +805,18 @@ func end_night() -> void:
 	_hover_hero = null
 	main_btn.text = "Let night fall"
 	main_btn.disabled = false
-	subtitle.text = "%s. Dig, build, and set the trap." % Game.M.name
+	subtitle.text = "%s. Build, upgrade, and set the trap." % Game.M.name
 	apply_layout()
 	await get_tree().process_frame
 	board.fit()
 
 func _on_finished(won: bool) -> void:
-	if won:
+	if won and Game.day >= Game.WIN_NIGHT and Game.tut < 0:
+		battle.resolve_win()
+		Platform.on_night_survived(Game.day)
+		in_run = false
+		_show_over(Game.end_run(true), false, true)
+	elif won:
 		var r := battle.resolve_win()
 		Platform.on_night_survived(Game.day)
 		_show_pick(r)
@@ -817,7 +833,7 @@ func _show_pick(r: Dictionary) -> void:
 	v.add_child(title("Night %d: the raiders are dead" % Game.day, "#e4a648", 38))
 	var extra := ""
 	if r.stolen > 0: extra += ", %d gold stolen by thieves who got away" % r.stolen
-	var lost := "You lost %d minion%s; recruit replacements by day. " % [r.lost, "s" if r.lost > 1 else ""] if r.lost > 0 else ""
+	var lost := "You lost %d minion%s; their rooms replace them at dawn. " % [r.lost, "s" if r.lost > 1 else ""] if r.lost > 0 else ""
 	var due := Game.boon_due(Game.day)
 	var why := "Choose a dark boon." if due else ("Godless: no boons this run." if Game.has_mod("godless")
 		else "Your next dark boon comes after night %d." % Game.next_boon_night())
@@ -842,24 +858,27 @@ func _pick(o: Dictionary) -> void:
 	pick_ov.visible = false
 	await end_night()
 	Game.dawn(o)
-	Game.tip("Scouts report a Paladin among tonight's raiders." if Game.is_boss_night(Game.day) else "A new day. Dig, build, and reset your traps.", Game.is_boss_night(Game.day))
+	Game.tip("Scouts report a Paladin among tonight's raiders." if Game.is_boss_night(Game.day) else "A new day. Build, upgrade, and reset your traps.", Game.is_boss_night(Game.day))
 
-func _show_over(earned: int, was_tutorial := false) -> void:
+func _show_over(earned: int, was_tutorial := false, won := false) -> void:
 	var v: VBoxContainer = over_ov.get_meta("box")
 	clear(v)
-	v.add_child(title("You have been slain", "#e4a648", 38))
+	v.add_child(title("The village is broken" if won else "You have been slain", "#e4a648", 38))
 	var bonus := " (×%.2f for Dread)" % Game.soul_mult() if Game.mods.size() > 0 else ""
-	v.add_child(lbl("%s falls on night %d. The village throws a feast. %d souls%s carry over to your next life." % [Game.M.name, Game.day, earned, bonus], 16, "#a7998f"))
+	if won:
+		v.add_child(lbl("%s holds the lair through night %d. No one in the valley dares raise a torch against it again. %d souls%s, victory bonus included, carry over." % [Game.M.name, Game.day, earned, bonus], 16, "#a7998f"))
+	else:
+		v.add_child(lbl("%s falls on night %d. The village throws a feast. %d souls%s carry over to your next life." % [Game.M.name, Game.day, earned, bonus], 16, "#a7998f"))
 	var dug := 0
 	for s in Game.slots:
 		if s.state != "rock":
 			dug += 1
-	v.add_child(lbl("Nights survived: %d    Heroes defeated: %d    Rooms dug: %d    Souls banked: %d" % [Game.day - 1, Game.kills, dug, Game.meta.souls], 17))
+	v.add_child(lbl("Nights survived: %d    Heroes defeated: %d    Rooms dug: %d    Souls banked: %d" % [Game.day if won else Game.day - 1, Game.kills, dug, Game.meta.souls], 17))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	v.add_child(row)
 	var bt := Button.new()
-	bt.text = "Rise again"
+	bt.text = "Play again" if won else "Rise again"
 	bt.theme_type_variation = "PrimaryButton"
 	bt.pressed.connect(_rise_again)
 	row.add_child(bt)
@@ -894,7 +913,7 @@ func show_start() -> void:
 	back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	back.pressed.connect(func(): menus.show_title())
 	head.add_child(back)
-	v.add_child(lbl("You start with a cave mouth, two empty chambers and your lair. Dig outward, room by room. Every room is real ground the heroes must cross, so where you put your lair, your traps and your minions decides every fight.", 16, "#a7998f"))
+	v.add_child(lbl("You start with a cave mouth, two empty chambers and your throne room. Build outward, room by room. Every room is real ground the heroes must cross, so where you put your throne, your traps and your minions decides every fight.", 16, "#a7998f"))
 	var grid := GridContainer.new()
 	var card_w := minf(1080.0, get_viewport_rect().size.x - 40.0) - 48.0
 	_dread_picker(v, card_w)
@@ -1008,10 +1027,9 @@ func _choose(k: String, use_mods := true) -> void:
 	menus.hide_all()
 	in_run = true
 	Game.new_run(k, Game.meta.get("last_mods", []) if use_mods and Game.mods_unlocked() else [])
-	subtitle.text = "%s. Dig, build, and set the trap." % Game.M.name
-	board.show_floor(0)
+	subtitle.text = "%s. Build, upgrade, and set the trap." % Game.M.name
 	board.fit(true)
-	Game.tip("Click a chamber to build in it, or the rock beside your rooms to dig. Heroes enter at the glowing gate.")
+	Game.tip("Click a chamber, or the rock beside your rooms, to build there. Heroes enter at the glowing gate.")
 
 ## A Vampire Lord run whose first five nights follow the tutorial's steps.
 func start_tutorial() -> void:
@@ -1030,8 +1048,7 @@ func continue_run() -> void:
 		tutorial.resume()
 	else:
 		tutorial.stop()
-	subtitle.text = "%s. Dig, build, and set the trap." % Game.M.name
-	board.show_floor(Game.floor_of_slot(Game.slot_idx("lair")))
+	subtitle.text = "%s. Build, upgrade, and set the trap." % Game.M.name
 	board.fit(true)
 	refresh()
 	Game.tip("Welcome back. Your dungeon is as you left it. Night %d is coming." % Game.day)

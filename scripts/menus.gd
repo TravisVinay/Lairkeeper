@@ -100,7 +100,7 @@ func _title_screen() -> Control:
 	v.add_theme_constant_override("separation", 8)
 	center.add_child(v)
 	v.add_child(_centered(ui.title("Lairkeeper", "#e4a648", 84)))
-	v.add_child(_centered(ui.lbl("Dig by day. Feast by night.", 18, "#a7998f", false)))
+	v.add_child(_centered(ui.lbl("Build by day. Feast by night.", 18, "#a7998f", false)))
 	var row := MonsterRow.new()
 	row.custom_minimum_size = Vector2(460, 120)
 	row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -178,7 +178,7 @@ func render_catalog() -> void:
 	souls.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	head.add_child(souls)
 	head.move_child(souls, 1)
-	var how := "Every build or upgrade takes 1 hour. Each room type can be built once per floor. Rearrange a room's furniture to wall off paths; heroes who can't reach you smash through it."
+	var how := "Every build or upgrade takes 1 hour. Each room type can be built once. Expand from the Layout panel to make room for more. Use Arrange to move minions and to carry furniture between any rooms to wall off paths; heroes who can't reach you smash through it."
 	if ui.in_run:
 		how += " Unlock new rooms from the title screen between runs."
 	else:
@@ -256,14 +256,12 @@ func _room_entry(t: String) -> Control:
 			costs.append("Built from the start" if R.get("fixed", false) else "Build %dg" % R.cost[0])
 		else:
 			costs.append("Lv %d: %dg" % [l + 1, R.cost[l]])
-	costs.append("then +40% a level, no cap")
 	v.add_child(ui.lbl(" · ".join(costs), 13, "#e4a648"))
-	for l in range(1, maxi(R.cost.size(), 3) + 2):
+	for l in range(1, Game.MAX_LVL + 1):
 		v.add_child(ui.lbl("Lv %d  %s" % [l, Data.room_eff(t, l)], 13, "#ede3cd" if l == 1 else "#b3a59b"))
-	v.add_child(ui.lbl("…and it keeps growing with every level after.", 13, "#8a7f90"))
 	if R.has("recruit"):
 		var U: Dictionary = Data.UNITS[R.recruit]
-		v.add_child(ui.lbl("%s: %d HP, hits for %d, moves %d. %dg each." % [U.name, U.hp, U.atk, U.move, U.cost], 13, "#a7998f"))
+		v.add_child(ui.lbl("%s: %d HP, hits for %d, moves %d. Free with the room." % [U.name, U.hp, U.atk, U.move], 13, "#a7998f"))
 	if not unlocked:
 		var c: int = R.unlock
 		if ui.in_run:
@@ -350,7 +348,7 @@ func _unit_sheet(b: Battle, u) -> Control:
 			["Range", "%d tile%s" % [u.rng, "" if u.rng == 1 else "s"]],
 			["Move", "%d tiles" % b.move_of(u)],
 			["Armor", "%d (blocks %d damage per hit)" % [u.armor, u.armor] if u.armor > 0 else "none"],
-			["In your lair", "takes 1 less damage"]]:
+			["In your throne room", "takes 1 less damage"]]:
 		grid.add_child(ui.lbl(e[0], 14, "#a7998f", false))
 		var val: Label = ui.lbl(e[1], 15, "#ede3cd")
 		val.size_flags_horizontal = Control.SIZE_EXPAND_FILL   # wrapped text needs a width to wrap to
@@ -472,7 +470,7 @@ func render_pause() -> void:
 
 # ---------------------------------------------------------------- confirm box
 
-func confirm(head: String, body: String, yes: String, cb: Callable) -> void:
+func confirm(head: String, body: String, yes: String, cb: Callable, no_text := "Cancel") -> void:
 	var v := _box(confirm_ov)
 	v.add_child(ui.title(head, "#e4a648", 30))
 	v.add_child(ui.lbl(body, 16, "#b3a59b"))
@@ -481,7 +479,7 @@ func confirm(head: String, body: String, yes: String, cb: Callable) -> void:
 	row.alignment = BoxContainer.ALIGNMENT_END
 	v.add_child(row)
 	var no := Button.new()
-	no.text = "Cancel"
+	no.text = no_text
 	no.theme_type_variation = "GhostButton"
 	no.pressed.connect(func(): confirm_ov.visible = false)
 	row.add_child(no)
@@ -530,12 +528,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	elif ui.battle != null and (ui.battle.sel != null or ui.hud.inspect != null or ui.battle.mode != ""):
 		return   # let the fight's Esc deselect first
-	elif ui.battle == null and (Game.trap_mode != "" or Game.ent_mode or Game.sel_minion != null or Game.decor_room >= 0):
-		Game.trap_mode = ""
-		Game.ent_mode = false
-		Game.sel_minion = null
-		Game.decor_room = -1
-		Game.decor_pick = null
+	elif ui.battle == null and (Game.trap_mode != "" or Game.ent_mode or Game.sel_minion != null or Game.arrange != ""):
+		Game.clear_modes()
 		ui.refresh()
 	else:
 		open_pause()

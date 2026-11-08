@@ -26,30 +26,25 @@ func _ready() -> void:
 	main._choose("vampire")
 	Game.gold = 400
 	Game.hours = 6
-	Game.build(7, "crypt")
-	Game.recruit("spawn")
-	Game.dig(6)
-	Game.build(6, "barracks")
-	Game.recruit("goblin")
-	Game.dig(8)
-	Game.build(8, "library" if Game.mk == "lich" else "torture")
-	Game.sel = 7
+	Game.build(4, "crypt")
+	Game.build(3, "barracks")
+	Game.build(5, "library" if Game.mk == "lich" else "torture")
+	Game.sel = 4
 	await _frames(30)
 	_save("res://build/shot_day.png")
+	Game.sel_minion = null
+	Game.toggle_arrange("furniture")
+	for k in Game.obj:
+		if Game.decor_movable(k) and Game.slot_of(k) == 4:
+			Game.day_click(k)
+			break
+	await _frames(10)
+	_save("res://build/shot_arrange.png")
+	Game.clear_modes()
 	main.menus.open_pause()
 	await _frames(10)
 	_save("res://build/shot_pause.png")
 	main.menus.pause_ov.visible = false
-	Game.bosses = 1
-	Game.hours = 6
-	Game.build(2, "stairs")
-	Game.dig(2 + Game.FLOOR_SLOTS + 5)
-	Game.sel = 2 + Game.FLOOR_SLOTS
-	main._show_floor(1)
-	main.refresh()
-	await _frames(30)
-	_save("res://build/shot_floor2.png")
-	main._show_floor(0)
 	await main.start_night()
 	await _frames(60)
 	_save("res://build/shot_night.png")
@@ -73,8 +68,7 @@ func _duo_shots(main) -> void:
 	main._choose("darklord", false)
 	Game.gold = 400
 	Game.hours = 6
-	Game.build(7, "sanctum")
-	Game.recruit("goblin")
+	Game.build(4, "sanctum")
 	Game.down = ["squire"]
 	Game.souls = 9
 	main.refresh()

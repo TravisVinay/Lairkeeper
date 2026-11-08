@@ -62,6 +62,8 @@ var threat := {}
 var revived := false
 var used := {}
 var queue := []
+## Trap tiles that have already fired tonight. Every trap fires once a night and re-arms at dawn.
+var sprung := {}
 var fx := []        # {kind, a, b, col, t, max, r}
 var texts := []     # {p, s, col, t}
 var parts := []     # {p, v, col, t}
@@ -98,7 +100,7 @@ func mk_unit(side: String, kind: String, p: Vector2i) -> Unit:
 	u.side = side
 	u.kind = kind
 	u.d = D
-	u.uname = Game.M.name if is_mon else D.name if is_sq else (Data.NAMES[kind].pick_random() if side == "h" else D.name)
+	u.uname = Game.M.name if is_mon else D.name if is_sq else (_hero_name(kind) if side == "h" else D.name)
 	u.pos = p
 	u.draw_pos = Vector2(p)
 	u.move = D.move
@@ -112,10 +114,10 @@ func mk_unit(side: String, kind: String, p: Vector2i) -> Unit:
 		u.hp = Game.shp
 		u.max_hp = Game.smax
 	elif side == "h":
-		u.max_hp = maxi(1, roundi(D.hp * Game.hero_hp_mult(Game.day) * (1.25 if Game.has_mod("zealous") else 1.0)
+		u.max_hp = maxi(1, roundi(D.hp * Game.hero_hp_mult(Game.day) * Game.veteran_hp(Game.day) * (1.25 if Game.has_mod("zealous") else 1.0)
 			* (1.0 - Data.scry_shaken(Game.lvl("scrying")))))
 		u.hp = u.max_hp
-		u.atk += Game.hero_atk_bonus(Game.day) + (1 if Game.has_mod("hardened") else 0)
+		u.atk += Game.hero_atk_bonus(Game.day) + (1 if Game.has_mod("hardened") else 0) + (1 if Game.is_company(Game.day) else 0)
 	else:
 		u.max_hp = D.hp + Game.b.get("minion_hp", 0)
 		if D.get("undead", false) and Game.mk == "necro":
@@ -126,15 +128,16 @@ func mk_unit(side: String, kind: String, p: Vector2i) -> Unit:
 	units.append(u)
 	return u
 
+## A name for a new hero that nobody else in tonight's raid already has, while any are left.
+func _hero_name(kind: String) -> String:
+	var taken := units.map(func(o): return o.uname)
+	var free: Array = Data.NAMES[kind].filter(func(n): return not n in taken)
+	return free.pick_random() if free.size() > 0 else Data.NAMES[kind].pick_random()
+
 
 func start() -> void:
-	Game.trap_mode = ""
-	Game.sel_minion = null
-	Game.ent_mode = false
-	Game.decor_room = -1
-	Game.decor_pick = null
+	Game.clear_modes()
 	queue = Game.party.duplicate()
-	Game.stairs_shut = 0
 	mon = mk_unit("p", "monster", Game.monster_start())
 	if Game.duo():
 		squire = mk_unit("p", "squire", Game.squire_start())
@@ -146,7 +149,10 @@ func start() -> void:
 		var u := mk_unit("p", m.kind, m.post)
 		u.mid = m.mid
 	admit(3)
-	Game.add_log("Night %d: %d heroes gather at your gate." % [Game.day, Game.party.size()], "bad")
+	if Game.is_company(Game.day):
+		Game.add_log("Night %d: %s, %d seasoned adventurers, stand at your gate." % [Game.day, Game.company_name(Game.party), Game.party.size()], "bad")
+	else:
+		Game.add_log("Night %d: %d heroes gather at your gate." % [Game.day, Game.party.size()], "bad")
 	start_player_turn(true)
 
 
@@ -247,6 +253,10 @@ func reach_of(u: Unit, avoid := false) -> Dictionary:
 	var q := [u.pos]
 	var i := 0
 	var m := move_of(u)
+	var at := {}   # who stands where, looked up once instead of per tile
+	for o in units:
+		if o.hp > 0:
+			at[o.pos] = o
 	while i < q.size():
 		var c: Vector2i = q[i]
 		i += 1
@@ -256,19 +266,15 @@ func reach_of(u: Unit, avoid := false) -> Dictionary:
 		for n in Game.steps(c):
 			if R.has(n):
 				continue
-			var o := unit_at(n)
+			var o = at.get(n)
 			if o and o.side != u.side:
 				continue
-			if avoid and Game.traps.has(n):
+			if avoid and armed(n):
 				continue
-			var nd: int = cur.d + 1
-			# a spiral stair ends a hero's movement at the bottom
-			if u.side == "h" and Game.is_link(c, n) and Game.lvl("stairs") >= 2:
-				nd = maxi(nd, m)
-			R[n] = {"d": nd, "prev": c, "occ": false}
+			R[n] = {"d": cur.d + 1, "prev": c, "occ": false}
 			q.append(n)
 	for k in R:
-		if k != u.pos and unit_at(k):
+		if k != u.pos and at.has(k):
 			R[k].occ = true
 	return R
 
@@ -317,22 +323,25 @@ func walk(u: Unit, path: Array) -> void:
 				hurt(u, md, TRAP, true)
 			return
 
+## A trap on this tile that hasn't fired yet tonight.
+func armed(p: Vector2i) -> bool:
+	return Game.traps.has(p) and not sprung.has(p)
+
 func spring_trap(u: Unit) -> bool:
 	var k := u.pos
-	if not Game.traps.has(k):
+	if not armed(k):
 		return false
 	var t: String = Game.traps[k]
+	sprung[k] = true
 	if t == "spikes":
 		text(k, "spikes!", Data.col("#e8dcc0"))
 		hurt(u, Game.trap_dmg("spikes"), TRAP)
 		return u.hp <= 0
 	if t == "snare":
-		Game.traps.erase(k)
 		text(k, "snared!", Data.col("#e0c080"))
 		u.root = 1
 		hurt(u, Game.trap_dmg("snare"), TRAP)
 		return true
-	Game.traps.erase(k)
 	ring(k, Data.col("#ff7a3a"), 1.6)
 	burst(k, Data.col("#ffb050"), 26)
 	shake = 0.25
@@ -447,6 +456,85 @@ func finish_unit(u: Unit) -> void:
 	u.acted = true
 	after_action()
 
+## Your minions (and thralls) that can still move or attack this turn. The monster and the
+## Squire are left to the player.
+func idle_minions() -> Array:
+	return alive("p").filter(func(u): return not is_mon(u) and not (u.moved and u.acted))
+
+## The "AI moves" button: every minion that hasn't finished acts on its own, then the heroes go.
+## Each one attacks the weakest hero it can hit; if none is in reach it steps to where it can hit
+## one, or else walks as far toward the nearest hero as it can.
+func auto_minions() -> void:
+	if busy or over:
+		return
+	busy = true
+	sel = null
+	reach = {}
+	mode = ""
+	changed.emit()
+	for u in idle_minions():
+		if u.hp <= 0:
+			continue
+		if not u.moved:
+			var dest := _auto_spot(u)
+			if dest != u.pos:
+				var R := reach_of(u)
+				focus.emit(u.pos)
+				await walk(u, path_to(R, dest))
+			u.moved = true
+		if not u.acted:
+			var t := _weakest(targets_for(u))
+			if t != null:
+				await attack(u, t)
+			u.acted = true
+		if check_end():
+			return
+	busy = false
+	await enemy_turn()
+
+## The hero in the list with the least HP left, or null.
+func _weakest(hs: Array) -> Unit:
+	var best: Unit = null
+	for h in hs:
+		if best == null or h.hp < best.hp:
+			best = h
+	return best
+
+## Where a minion should walk this turn: the closest tile it can attack from (favoring weak
+## targets), or else the reachable tile nearest a hero on foot. Its own tile if nothing is better.
+func _auto_spot(u: Unit) -> Vector2i:
+	var hs := alive("h")
+	if hs.is_empty():
+		return u.pos
+	var R := reach_of(u)
+	var best := u.pos
+	var best_score := INF
+	for k in R:
+		if R[k].occ:
+			continue
+		var weakest := 1 << 20
+		for h in hs:
+			if Game.in_range(k, h.pos, u.rng):
+				weakest = mini(weakest, h.hp)
+		if weakest < (1 << 20):
+			var sc: float = weakest * 100 + R[k].d
+			if sc < best_score:
+				best_score = sc
+				best = k
+	if best_score < INF:
+		return best
+	# nobody in reach this turn: close in on the nearest hero
+	var F := Game.field(hs.map(func(h): return h.pos))
+	var best_d: int = F.get(u.pos, 1 << 20)
+	for k in R:
+		if R[k].occ:
+			continue
+		var d: int = F.get(k, 1 << 20)
+		if d < best_d or (d == best_d and R[k].d < R[best].d):
+			best_d = d
+			best = k
+	return best
+
 func after_action() -> void:
 	if check_end():
 		return
@@ -529,8 +617,7 @@ func spell_tiles(sp: Dictionary) -> Array:
 				if Game.man(k, m.pos) <= r and empty_tile(k):
 					o.append(k)
 		_:
-			var f0 := Game.floor_of(m.pos) * Game.BH
-			for y in range(maxi(f0, m.pos.y - r), mini(f0 + Game.BH - 1, m.pos.y + r) + 1):
+			for y in range(maxi(0, m.pos.y - r), mini(Game.BH - 1, m.pos.y + r) + 1):
 				for x in range(maxi(0, m.pos.x - r), mini(Game.BW - 1, m.pos.x + r) + 1):
 					var p := Vector2i(x, y)
 					if Game.man(p, m.pos) > r or not Game.is_open(p):
@@ -728,21 +815,6 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 			burst(p, Data.col("#e8dcc0"), 10)
 			text(p, "click", Data.col("#e8dcc0"))
 
-## Room power of a level 3 Stairs room: block every staircase for the next 2 hero turns.
-func shut_stairs() -> void:
-	if busy or used.has("stairs") or Game.lvl("stairs") < 3:
-		return
-	used.stairs = true
-	Game.stairs_shut = Data.stairs_shut_turns(Game.lvl("stairs"))
-	for k in Game.links:
-		burst(k, Data.col("#8a7f90"), 8)
-		for u in units:
-			if u.hp > 0 and u.side == "h" and u.pos == k:
-				hurt(u, 8, TRAP, true)
-	shake = 0.3
-	Game.add_log("You bring down the stairs. Nobody passes between floors for %d turns." % Game.stairs_shut, "info")
-	after_action()
-
 func collapse() -> void:
 	var si := Game.slot_idx("collapse")
 	if si < 0 or busy or used.has("collapse"):
@@ -767,7 +839,7 @@ func collapse() -> void:
 # ---------------------------------------------------------------- combat
 
 func _reward(h: Unit) -> void:
-	var g := Game.kill_gold(h.d.gold)
+	var g := Game.kill_gold(Game.veteran_gold(Game.day, h.d.gold))
 	loot += g
 	kills += 1
 	Game.kills += 1
@@ -893,10 +965,6 @@ func enemy_turn() -> void:
 		if h.slow > 0: h.slow -= 1
 		if h.conf > 0: h.conf -= 1
 		if h.hex > 0: h.hex -= 1
-	if Game.stairs_shut > 0:
-		Game.stairs_shut -= 1
-		if Game.stairs_shut == 0:
-			Game.add_log("The rubble on the stairs is cleared.")
 	if queue.size() > 0:
 		admit(2)
 	turn += 1
@@ -1092,19 +1160,24 @@ func smash(h: Unit, k: Vector2i) -> void:
 
 ## A sapper dismantles one trap in the 3x3 around it, for good. Returns false if none is there.
 func _disarm(h: Unit) -> bool:
+	var pick = null
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			var k: Vector2i = h.pos + Vector2i(dx, dy)
-			if Game.traps.has(k):
-				var t: String = Game.traps[k]
-				Game.traps.erase(k)
-				h.lunge = Vector2(k - h.pos) * 0.25
-				h.lunge_t = 0.15
-				text(k, "disarmed", Data.col("#e0c080"))
-				Game.add_log("%s spends the turn prying apart your %s." % [h.uname, Data.TRAPS[t].name.to_lower()], "bad")
-				await wait(0.22)
-				return true
-	return false
+			# armed traps first; a sprung one is still worth wrecking before it re-arms
+			if Game.traps.has(k) and (pick == null or (armed(k) and not armed(pick))):
+				pick = k
+	if pick == null:
+		return false
+	var t: String = Game.traps[pick]
+	Game.traps.erase(pick)
+	sprung.erase(pick)
+	h.lunge = Vector2(pick - h.pos) * 0.25
+	h.lunge_t = 0.15
+	text(pick, "disarmed", Data.col("#e0c080"))
+	Game.add_log("%s spends the turn prying apart your %s." % [h.uname, Data.TRAPS[t].name.to_lower()], "bad")
+	await wait(0.22)
+	return true
 
 ## Sort order for hero targets: nearest by walking distance, ties go to the monster.
 func _closer(a: Unit, c: Unit, F: Dictionary) -> bool:
@@ -1156,7 +1229,6 @@ func resolve_win() -> Dictionary:
 			if e[1].hp <= 0 and not e[0] in Game.down:
 				Game.down.append(e[0])
 	Game.gold += loot
-	Game.stairs_shut = 0
 	var lost := []
 	for m in Game.minions:
 		var alive_now := false
@@ -1167,8 +1239,6 @@ func resolve_win() -> Dictionary:
 			lost.append(m)
 	for m in lost:
 		Game.minions.erase(m)
-		if not m.free:
-			Game.fallen.append(m.kind)
 	Game.meta.best = maxi(Game.meta.best, Game.day)
 	Game.save_meta()
 	if smashed > 0:

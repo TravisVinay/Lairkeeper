@@ -4,7 +4,6 @@ extends Control
 
 signal tile_clicked(p: Vector2i)
 signal tile_hovered(p: Vector2i)
-signal floor_changed(f: int)
 
 const T := 64.0
 
@@ -14,13 +13,28 @@ var cam_z := 30.0                # screen pixels per tile
 var tgt := cam
 var tgt_z := cam_z
 var hover := Vector2i(-99, -99)
-var shown_floor := 0             # the floor being shown
 var hint_slot := -1              # a chamber the tutorial is pointing at, or -1
 var now := 0.0
 var font: Font
 var _press = null
 var _press_cam := Vector2.ZERO
 var _dragging := false
+var _sh := Vector2.ZERO          # this frame's screen shake
+## The still parts of the map (rock, floor, room tints, walls, traps, furniture that does not move)
+## are baked into a texture at the current zoom and shown as one sprite. Drawn shape by shape they
+## cost over a thousand draw calls a frame in a big dungeon; baked, they cost one. The bake is
+## redone only when the dungeon changes or the zoom settles somewhere new.
+var map_vp: SubViewport
+var map_drawer: Node2D
+var map_sprite: Sprite2D
+var _map_key := []
+var _map_dirty := true
+var _baked_z := 0.0
+## Sharpest the bake gets, in pixels per tile; closer than this the texture is stretched.
+const MAP_MAX_Z := 128.0
+
+## Furniture that animates, so it is drawn every frame instead of into the cached map.
+const ANIMATED := ["brazier", "candles", "fire", "forge", "gear", "gearbig", "jar", "pool", "runecircle", "well", "wisp"]
 
 
 func _ready() -> void:
@@ -29,6 +43,27 @@ func _ready() -> void:
 	font = ThemeDB.fallback_font
 	resized.connect(_on_resized)
 	mouse_exited.connect(_on_mouse_exited)
+	var bg := ColorRect.new()
+	bg.color = Data.col("#0e0b10")
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bg.show_behind_parent = true
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
+	map_vp = SubViewport.new()
+	map_vp.transparent_bg = true
+	map_vp.disable_3d = true
+	map_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(map_vp)
+	map_drawer = Node2D.new()
+	map_drawer.draw.connect(_draw_map)
+	map_vp.add_child(map_drawer)
+	map_sprite = Sprite2D.new()   # a Node2D, so it is culled by its texture, not a Control's rect
+	map_sprite.centered = false
+	map_sprite.show_behind_parent = true
+	map_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	map_sprite.texture = map_vp.get_texture()
+	add_child(map_sprite)
+	Game.changed.connect(func(): _map_dirty = true)
 
 
 func _on_mouse_exited() -> void:
@@ -44,6 +79,10 @@ func _on_resized() -> void:
 	else:
 		clamp_cam()
 
+## A trap that has already fired tonight.
+func sprung(p: Vector2i) -> bool:
+	return battle != null and battle.sprung.has(p)
+
 func fit_z() -> float:
 	return minf(size.x / Game.BW, size.y / Game.BH) if size.x > 0.0 else 30.0
 
@@ -54,26 +93,9 @@ func night_z() -> float:
 func shade(x: int, y: int) -> float:
 	return fposmod(sin(x * 12.9898 + y * 78.233) * 43758.5453, 1.0)
 
-func top() -> float:
-	return float(shown_floor * Game.BH)
-
-func show_floor(f: int, snap := true) -> void:
-	f = clampi(f, 0, Game.floors - 1)
-	var changed := f != shown_floor
-	shown_floor = f
-	if battle == null or zoomed_out():
-		fit(snap)
-	else:
-		tgt.y += (f - Game.floor_of(Vector2i(cam))) * Game.BH
-		clamp_cam()
-		if snap:
-			cam = tgt
-	if changed:
-		floor_changed.emit(f)
-
 func fit(snap := false) -> void:
 	tgt_z = fit_z()
-	tgt = Vector2(Game.BW / 2.0, top() + Game.BH / 2.0)
+	tgt = Vector2(Game.BW / 2.0, Game.BH / 2.0)
 	if snap:
 		cam = tgt
 		cam_z = tgt_z
@@ -95,15 +117,8 @@ func pan(d: Vector2) -> void:
 	tgt += d
 	clamp_cam()
 
-## Recenters on a tile only when it is near the edge of the view, switching floors if needed.
+## Recenters on a tile only when it is near the edge of the view.
 func follow(p: Vector2i) -> void:
-	if Game.floor_of(p) != shown_floor:
-		shown_floor = Game.floor_of(p)
-		tgt = Vector2(p) + Vector2(0.5, 0.5)
-		clamp_cam()
-		cam = tgt
-		floor_changed.emit(shown_floor)
-		return
 	var hw := size.x / 2.0 / tgt_z
 	var hh := size.y / 2.0 / tgt_z
 	var c := Vector2(p) + Vector2(0.5, 0.5)
@@ -115,20 +130,17 @@ func clamp_cam() -> void:
 	var hw := size.x / 2.0 / tgt_z
 	var hh := size.y / 2.0 / tgt_z
 	tgt.x = Game.BW / 2.0 if Game.BW <= hw * 2.0 else clampf(tgt.x, hw, Game.BW - hw)
-	tgt.y = top() + Game.BH / 2.0 if Game.BH <= hh * 2.0 else clampf(tgt.y, top() + hh, top() + Game.BH - hh)
+	tgt.y = Game.BH / 2.0 if Game.BH <= hh * 2.0 else clampf(tgt.y, hh, Game.BH - hh)
 
-## The tile under a screen point, or (-99, -99) when the point is off the shown floor.
+## The tile under a screen point, or (-99, -99) when the point is off the map.
 func screen_to_tile(sp: Vector2) -> Vector2i:
 	var w := (sp - size / 2.0) / cam_z + cam
 	var t := Vector2i(floori(w.x), floori(w.y))
-	return t if Game.floor_of(t) == shown_floor and w.y >= 0.0 else Vector2i(-99, -99)
+	return t if Game.in_b(t) else Vector2i(-99, -99)
 
-## Where a tile-space point (in tiles, floors stacked) currently appears on screen.
+## Where a tile-space point (in tiles) currently appears on screen.
 func tile_to_screen(w: Vector2) -> Vector2:
 	return (w - cam) * cam_z + size / 2.0
-
-func here(p: Vector2i) -> bool:
-	return p.y >= shown_floor * Game.BH and p.y < (shown_floor + 1) * Game.BH
 
 
 # ---------------------------------------------------------------- input
@@ -200,106 +212,66 @@ func _process(dt: float) -> void:
 			t.p.y -= dt * 0.7
 		battle.texts = battle.texts.filter(func(t): return t.t > 0.0)
 		battle.shake = maxf(0.0, battle.shake - dt)
+	_sh = Vector2(randf() - 0.5, randf() - 0.5) * 8.0 if battle and battle.shake > 0.0 else Vector2.ZERO
+	var key := [Game.map_ver, Game.mk, Game.SW, Game.SH, Game.entrance, Game.traps.hash(), battle.sprung.hash() if battle else 0]
+	var want_z := minf(cam_z, MAP_MAX_Z)
+	var off := absf(want_z - _baked_z) / want_z
+	var settled := absf(cam_z - tgt_z) < tgt_z * 0.01
+	if _map_dirty or key != _map_key or (off > 0.02 and settled) or off > 0.5:
+		_map_dirty = false
+		_map_key = key
+		_bake_map(want_z)
+	var sc := cam_z / _baked_z
+	var at := size / 2.0 - cam * cam_z + _sh
+	map_sprite.scale = Vector2(sc, sc)
+	map_sprite.position = at.round() if absf(sc - 1.0) < 0.001 else at
+	map_sprite.visible = Game.mk != ""
 	queue_redraw()
 
 
 # ---------------------------------------------------------------- drawing
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Data.col("#0e0b10"))
 	if Game.mk == "":
 		return
-	var sh := Vector2.ZERO
-	if battle and battle.shake > 0.0:
-		sh = Vector2(randf() - 0.5, randf() - 0.5) * 8.0
 	var s := cam_z / T
-	var xf := Transform2D(0.0, Vector2(s, s), 0.0, size / 2.0 - cam * cam_z + sh)
+	var xf := Transform2D(0.0, Vector2(s, s), 0.0, size / 2.0 - cam * cam_z + _sh)
 	var mcol := Data.col(Game.M.col)
 	draw_set_transform_matrix(xf)
-
-	var y0 := shown_floor * Game.BH
-	var s0 := shown_floor * Game.FLOOR_SLOTS
-	# rock and floor
-	for y in range(y0, y0 + Game.BH):
-		for x in Game.BW:
-			var p := Vector2i(x, y)
-			var v := shade(x, y)
-			var r := Rect2(x * T, y * T, T + 1, T + 1)
-			if not Game.is_floor(p):
-				if shown_floor == 0:
-					draw_rect(r, Color(0.06 + v * 0.03, 0.05 + v * 0.025, 0.07 + v * 0.03))
-				else:
-					# open air around an upper floor of the tower
-					draw_rect(r, Color(0.04 + v * 0.01, 0.05 + v * 0.015, 0.1 + v * 0.03))
-					if v > 0.93:
-						draw_circle(Vector2(x * T + v * 50, y * T + (1.0 - v) * 600), 2.0, Data.col("#ede3cd", 0.5))
-			else:
-				draw_rect(r, Color(0.15 + v * 0.04, 0.13 + v * 0.035, 0.17 + v * 0.04))
-				draw_rect(Rect2(x * T, y * T, T, T), Color(0, 0, 0, 0.35), false, 1.5)
-	for si in range(s0, s0 + Game.FLOOR_SLOTS):
+	for si in Game.slots.size():
 		var sl: Dictionary = Game.slots[si]
-		if sl.state != "built":
-			continue
-		var o := Vector2(Game.slot_xy(si) * Game.RS) * T
-		var col := mcol if sl.type == "lair" else Data.col(Data.ROOMS[sl.type].col)
-		draw_rect(Rect2(o, Vector2(Game.RS, Game.RS) * T), Color(col, 0.09))
-		if sl.type == "lair":
-			Sprites.glow(self, o + Vector2(2.5, 1.5) * T, Game.RS * T * 0.6, Color(col, 0.35))
-		elif sl.type == "cistern":
-			draw_rect(Rect2(o, Vector2(Game.RS, Game.RS) * T), Data.col("#4f8fbf", 0.2))
+		if sl.state == "built" and sl.type == "cistern":
+			var o := Vector2(Game.slot_xy(si) * Game.RS) * T
 			for i in 5:
 				var pts := PackedVector2Array()
 				for j in 33:
 					var xx := j * 10.0
 					pts.append(o + Vector2(xx, (0.5 + i) * T + sin(xx / 16.0 + now * 2.0 + i) * 3.0))
 				draw_polyline(pts, Data.col("#96c8f0", 0.25), 2.0)
-
-	# flat furniture
+	# animated flat furniture; the still pieces are in the cached map
 	for k in Game.obj:
-		if here(k) and not Game.obj[k].block:
+		if not Game.obj[k].block and Game.obj[k].kind in ANIMATED:
 			draw_set_transform_matrix(xf * Transform2D(0.0, Vector2(k) * T))
 			Sprites.furniture(self, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
 	draw_set_transform_matrix(xf)
-
-	# walls
-	var segs := PackedVector2Array()
-	for y in range(y0, y0 + Game.BH):
-		for x in Game.BW:
-			var p := Vector2i(x, y)
-			if not Game.is_floor(p):
-				continue
-			for d in Game.DIRS:
-				var n: Vector2i = p + d
-				if not Game.wall_between(p, n) or (p == Game.entrance and not Game.in_b(n)):
-					continue
-				var a := Vector2(x, y) * T
-				if d.x == 1:
-					segs.append_array([a + Vector2(T, 0), a + Vector2(T, T)])
-				elif d.x == -1:
-					segs.append_array([a, a + Vector2(0, T)])
-				elif d.y == 1:
-					segs.append_array([a + Vector2(0, T), a + Vector2(T, T)])
-				else:
-					segs.append_array([a, a + Vector2(T, 0)])
-	if segs.size() > 0:
-		draw_multiline(segs, Data.col("#09070b"), 9.0)
-	if shown_floor == 0:
-		_draw_gate(xf)
+	_draw_gate(xf)
 
 	if battle == null:
 		_draw_day_overlay()
 	else:
 		_draw_night_overlay()
 
+	# armed blast runes pulse, so they draw live; everything else is in the cached map
 	for k in Game.traps:
-		if not here(k):
+		if Game.traps[k] != "rune" or sprung(k):
 			continue
 		draw_set_transform_matrix(xf * Transform2D(0.0, Vector2(k) * T))
 		Sprites.trap(self, Game.traps[k], now)
 	for k in Game.obj:
-		if here(k) and Game.obj[k].block:
+		if Game.obj[k].block:
 			draw_set_transform_matrix(xf * Transform2D(0.0, Vector2(k) * T))
-			Sprites.furniture(self, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
+			if Game.obj[k].kind in ANIMATED:
+				Sprites.furniture(self, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
 			# furniture the heroes are hacking at shows how much it has left
 			if battle and battle.decor_hp.has(k):
 				var f := float(battle.decor_hp[k]) / Data.decor_hp(Game.obj[k].kind)
@@ -310,7 +282,7 @@ func _draw() -> void:
 	# room labels
 	var fs := int(maxf(18.0, 13.0 * T / cam_z))
 	var pad := fs * 0.35
-	for si in range(s0, s0 + Game.FLOOR_SLOTS):
+	for si in Game.slots.size():
 		var sl: Dictionary = Game.slots[si]
 		if sl.state == "rock":
 			continue
@@ -327,7 +299,7 @@ func _draw() -> void:
 		draw_string(font, at + Vector2(pad, pad * 0.3 + font.get_ascent(fs)), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 	# the tutorial's pulsing pointer at the chamber to click next
-	if hint_slot >= 0 and Game.floor_of_slot(hint_slot) == shown_floor and battle == null:
+	if hint_slot >= 0 and battle == null:
 		var hr := Rect2(Vector2(Game.slot_xy(hint_slot) * Game.RS) * T, Vector2(Game.RS, Game.RS) * T)
 		var pulse := 0.5 + 0.5 * sin(now * 4.0)
 		draw_rect(hr, Data.col("#e4a648", 0.06 + 0.08 * pulse))
@@ -335,7 +307,7 @@ func _draw() -> void:
 
 	if battle:
 		for k in battle.corpses:
-			if here(k) and battle.unit_at(k) == null:
+			if battle.unit_at(k) == null:
 				var a := Vector2(k) * T
 				draw_line(a + Vector2(18, 40), a + Vector2(46, 30), Data.col("#e8dcc0", 0.5), 3.0)
 				draw_line(a + Vector2(22, 28), a + Vector2(42, 44), Data.col("#e8dcc0", 0.5), 3.0)
@@ -343,19 +315,17 @@ func _draw() -> void:
 			for h in battle.targets_for(battle.sel):
 				draw_arc((h.draw_pos + Vector2(0.5, 0.5)) * T, T * 0.46, 0, TAU, 28, Data.col("#ff5d6a"), 3.0, true)
 		# the bond between the Dark Lord and his Squire
-		if battle.bonded() and here(battle.mon.pos) and here(battle.squire.pos):
+		if battle.bonded():
 			var a := (battle.mon.draw_pos + Vector2(0.5, 0.5)) * T
 			var z := (battle.squire.draw_pos + Vector2(0.5, 0.5)) * T
 			draw_line(a, z, Data.col("#b89cff", 0.35 + 0.15 * sin(now * 3.0)), 3.0, true)
 		for u in battle.units:
-			if u.hp > 0 and here(u.pos):
+			if u.hp > 0:
 				_draw_unit(xf, u.kind, u.d, u.draw_pos + u.lunge, u.side, u.hp, u.max_hp, u.id, u.flash > 0.0,
 					battle.sel == u, u.acted and u.moved and u.side == "p" and not battle.busy, u.slow > 0, u.root > 0,
 					u.thrall or u.conf > 0, u.flee, u.stun > 0, u.thrall, true)
 		draw_set_transform_matrix(xf)
 		for f in battle.fx:
-			if not here(f.a):
-				continue
 			var a: float = clampf(f.t / f.max, 0.0, 1.0)
 			var c: Color = f.col
 			c.a = a
@@ -375,16 +345,97 @@ func _draw() -> void:
 			draw_string(font, at, t.s, HORIZONTAL_ALIGNMENT_CENTER, 220, 22, c)
 	else:
 		var ms := Game.monster_start()
-		if here(ms) and not "lord" in Game.down:
+		if not "lord" in Game.down:
 			_draw_unit(xf, "monster", Game.M, Vector2(ms), "p", Game.mhp, Game.mmax, 0, false, false, false, false, false, false, false, false, false, false)
-		if Game.duo() and here(Game.squire_start()) and not "squire" in Game.down:
+		if Game.duo() and not "squire" in Game.down:
 			_draw_unit(xf, "squire", Game.M.partner, Vector2(Game.squire_start()), "p", Game.shp, Game.smax, 1, false, false, false, false, false, false, false, false, false, false)
 		for m in Game.minions:
-			if not here(m.post):
-				continue
 			_draw_unit(xf, m.kind, Data.UNITS[m.kind], Vector2(m.post), "p", 1, 1, m.mid, false, Game.sel_minion == m, false,
 				false, false, false, false, false, false, false)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+## Re-renders the still map into its texture at z pixels per tile.
+func _bake_map(z: float) -> void:
+	_baked_z = z
+	map_vp.size = Vector2i(ceili(Game.BW * z), ceili(Game.BH * z))
+	map_drawer.scale = Vector2(z / T, z / T)
+	map_drawer.position = Vector2.ZERO
+	map_drawer.queue_redraw()
+	map_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+## The still map, in world pixels. map_drawer's transform maps it onto the texture.
+func _draw_map() -> void:
+	if Game.mk == "":
+		return
+	var c := map_drawer
+	var mcol := Data.col(Game.M.col)
+
+	# rock and floor
+	for y in Game.BH:
+		for x in Game.BW:
+			var p := Vector2i(x, y)
+			var v := shade(x, y)
+			var r := Rect2(x * T, y * T, T + 1, T + 1)
+			if not Game.is_floor(p):
+				c.draw_rect(r, Color(0.06 + v * 0.03, 0.05 + v * 0.025, 0.07 + v * 0.03))
+			else:
+				c.draw_rect(r, Color(0.15 + v * 0.04, 0.13 + v * 0.035, 0.17 + v * 0.04))
+				c.draw_rect(Rect2(x * T, y * T, T, T), Color(0, 0, 0, 0.35), false, 1.5)
+	for si in Game.slots.size():
+		var sl: Dictionary = Game.slots[si]
+		if sl.state != "built":
+			continue
+		var o := Vector2(Game.slot_xy(si) * Game.RS) * T
+		var col := mcol if sl.type == "lair" else Data.col(Data.ROOMS[sl.type].col)
+		c.draw_rect(Rect2(o, Vector2(Game.RS, Game.RS) * T), Color(col, 0.09))
+		if sl.type == "lair":
+			Sprites.glow(c, o + Vector2(2.5, 1.5) * T, Game.RS * T * 0.6, Color(col, 0.35))
+		elif sl.type == "cistern":
+			c.draw_rect(Rect2(o, Vector2(Game.RS, Game.RS) * T), Data.col("#4f8fbf", 0.2))
+
+	# flat furniture
+	for k in Game.obj:
+		if not Game.obj[k].block and not Game.obj[k].kind in ANIMATED:
+			c.draw_set_transform(Vector2(k) * T)
+			Sprites.furniture(c, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
+	c.draw_set_transform(Vector2.ZERO)
+
+	# walls
+	var segs := PackedVector2Array()
+	for y in Game.BH:
+		for x in Game.BW:
+			var p := Vector2i(x, y)
+			if not Game.is_floor(p):
+				continue
+			for d in Game.DIRS:
+				var n: Vector2i = p + d
+				if not Game.wall_between(p, n) or (p == Game.entrance and not Game.in_b(n)):
+					continue
+				var a := Vector2(x, y) * T
+				if d.x == 1:
+					segs.append_array([a + Vector2(T, 0), a + Vector2(T, T)])
+				elif d.x == -1:
+					segs.append_array([a, a + Vector2(0, T)])
+				elif d.y == 1:
+					segs.append_array([a + Vector2(0, T), a + Vector2(T, T)])
+				else:
+					segs.append_array([a, a + Vector2(T, 0)])
+	if segs.size() > 0:
+		c.draw_multiline(segs, Data.col("#09070b"), 9.0)
+	for k in Game.traps:
+		if Game.traps[k] != "rune" or sprung(k):
+			c.draw_set_transform(Vector2(k) * T)
+			Sprites.trap(c, Game.traps[k], now)
+			if sprung(k):
+				# fired tonight: dimmed until it re-arms at dawn
+				c.draw_rect(Rect2(6, 6, T - 12, T - 12), Color(0.05, 0.04, 0.06, 0.6))
+	c.draw_set_transform(Vector2.ZERO)
+	# still blocking furniture sits on top of the walls
+	for k in Game.obj:
+		if Game.obj[k].block and not Game.obj[k].kind in ANIMATED:
+			c.draw_set_transform(Vector2(k) * T)
+			Sprites.furniture(c, Game.obj[k].kind, now, k.x * 7 + k.y, mcol)
+	c.draw_set_transform(Vector2.ZERO)
 
 func _draw_gate(xf: Transform2D) -> void:
 	var e := Game.entrance
@@ -409,27 +460,36 @@ func _draw_gate(xf: Transform2D) -> void:
 		draw_string(font, at, "+%d waiting" % battle.queue.size(), HORIZONTAL_ALIGNMENT_CENTER, 220, 20, Data.col("#ffd090"))
 
 func _draw_day_overlay() -> void:
-	# rearranging furniture: movable pieces outlined, the picked one bright, free spots tinted
-	if Game.decor_room >= 0 and Game.floor_of_slot(Game.decor_room) == shown_floor:
-		for p in Game.slot_tiles(Game.decor_room):
-			if Game.decor_movable(p):
-				draw_rect(Rect2(p.x * T + 3, p.y * T + 3, T - 6, T - 6), Data.col("#b89cff", 1.0 if p == Game.decor_pick else 0.45), false, 3.0)
-			elif Game.decor_pick != null and Game.decor_spot_ok(p):
-				draw_rect(Rect2(p.x * T + 4, p.y * T + 4, T - 8, T - 8), Data.col("#b89cff", 0.2 + sin(now * 4.0) * 0.06))
+	# arranging furniture: every movable piece outlined, the picked one bright,
+	# and once one is in hand, every free spot tinted
+	if Game.arrange == "furniture":
+		var tint := Data.col("#b89cff", 0.2 + sin(now * 4.0) * 0.06)
+		for y in Game.BH:
+			for x in Game.BW:
+				var p := Vector2i(x, y)
+				if Game.decor_movable(p):
+					draw_rect(Rect2(p.x * T + 3, p.y * T + 3, T - 6, T - 6), Data.col("#b89cff", 1.0 if p == Game.decor_pick else 0.45), false, 3.0)
+				elif Game.decor_pick != null and Game.decor_spot_ok(p):
+					draw_rect(Rect2(p.x * T + 4, p.y * T + 4, T - 8, T - 8), tint)
+	# arranging minions: a ring on each one so they're easy to find
+	if Game.arrange == "minions":
+		for m in Game.minions:
+			var on: bool = Game.sel_minion == m
+			draw_arc((Vector2(m.post) + Vector2(0.5, 0.5)) * T, T * 0.46, 0, TAU, 28, Data.col("#86b35e", 1.0 if on else 0.55 + sin(now * 4.0) * 0.2), 3.0, true)
 	if Game.ent_mode:
 		var a := 0.25 + sin(now * 4.0) * 0.1
-		for y in range(shown_floor * Game.BH, (shown_floor + 1) * Game.BH):
+		for y in Game.BH:
 			for x in Game.BW:
 				var p := Vector2i(x, y)
 				if Game.on_border(p) and Game.is_open(p) and p != Game.entrance:
 					draw_rect(Rect2(x * T + 4, y * T + 4, T - 8, T - 8), Data.col("#e4a648", a))
-	if Game.sel >= 0 and Game.floor_of_slot(Game.sel) == shown_floor and not Game.ent_mode and Game.trap_mode == "":
+	if Game.sel >= 0 and not Game.ent_mode and Game.trap_mode == "":
 		var o := Vector2(Game.slot_xy(Game.sel) * Game.RS) * T
 		draw_rect(Rect2(o + Vector2(4, 4), Vector2(Game.RS, Game.RS) * T - Vector2(8, 8)), Data.col("#e4a648"), false, 4.0)
 	if not Game.in_b(hover):
 		return
-	if Game.trap_mode != "" or Game.sel_minion != null or Game.ent_mode or Game.decor_room >= 0:
-		var c := Data.col("#e4a648") if Game.trap_mode != "" else (Data.col("#ffd090") if Game.ent_mode else (Data.col("#b89cff") if Game.decor_room >= 0 else Data.col("#86b35e")))
+	if Game.trap_mode != "" or Game.sel_minion != null or Game.ent_mode or Game.arrange != "":
+		var c := Data.col("#e4a648") if Game.trap_mode != "" else (Data.col("#ffd090") if Game.ent_mode else (Data.col("#b89cff") if Game.arrange == "furniture" else Data.col("#86b35e")))
 		draw_rect(Rect2(hover.x * T + 3, hover.y * T + 3, T - 6, T - 6), c, false, 3.0)
 	else:
 		var o := Vector2(Game.slot_xy(Game.slot_of(hover)) * Game.RS) * T

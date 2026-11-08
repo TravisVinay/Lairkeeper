@@ -77,21 +77,19 @@ const NAMES := {
 }
 
 # Rooms with "unlock" are blueprints bought with souls between runs; the rest are open from the
-# first run: the Lair, Stairs Up, the four basics and one signature room per monster.
+# first run: the Throne Room, the four basics and one signature room per monster.
 # Furniture is [x, y, kind, blocks] in room-local tiles. Blocking pieces only sit on the four
 # corners or the four inner diagonals, never on a doorway or the center cross, so every door connects.
 const ROOMS := {
-	"lair": {"name": "Your Lair", "col": "#c0304c", "fixed": true, "cost": [0, 40, 70, 100], "next": "+6 max HP",
+	"lair": {"name": "Throne Room", "col": "#c0304c", "fixed": true, "cost": [0, 40, 70], "next": "+6 max HP",
 		"objs": [[1, 1, "pillar", 1], [3, 1, "pillar", 1], [1, 3, "pillar", 1], [3, 3, "pillar", 1], [2, 1, "throne"], [2, 2, "rug"], [2, 3, "rug"], [0, 0, "brazier", 1], [4, 0, "brazier", 1]]},
-	"stairs": {"name": "Stairs Up", "col": "#c8b48a", "cost": [60, 45, 70],
-		"objs": [[2, 2, "stairs_up"], [1, 1, "brazier", 1], [3, 3, "brazier", 1]]},
 	"treasury": {"name": "Treasury", "col": "#e4a648", "cost": [25, 40, 60],
 		"objs": [[0, 0, "chest", 1], [4, 0, "chest", 1], [3, 1, "chest", 1], [0, 4, "coins"], [4, 4, "coins"], [1, 1, "coins"], [3, 3, "coins"]]},
 	"larder": {"name": "Larder", "col": "#d08a5a", "cost": [20, 35, 50],
 		"objs": [[1, 1, "table", 1], [3, 1, "table", 1], [0, 4, "barrel", 1], [4, 4, "barrel", 1], [0, 0, "meat"], [4, 0, "meat"], [1, 3, "meat"]]},
 	"barracks": {"name": "Goblin Barracks", "col": "#86b35e", "cost": [25, 40, 60], "recruit": "goblin", "cap": 2,
 		"objs": [[0, 0, "bunk", 1], [4, 0, "bunk", 1], [1, 1, "bunk", 1], [3, 1, "bunk", 1], [2, 2, "fire"], [0, 4, "rack", 1], [4, 4, "rack", 1]]},
-	"kennel": {"unlock": 30, "name": "Hellhound Kennel", "col": "#d9573f", "cost": [40, 65], "recruit": "hound", "cap": 1,
+	"kennel": {"unlock": 30, "name": "Hellhound Kennel", "col": "#d9573f", "cost": [40, 65, 95], "recruit": "hound", "cap": 1,
 		"objs": [[0, 0, "cage", 1], [4, 0, "cage", 1], [0, 4, "cage", 1], [4, 4, "cage", 1], [1, 1, "bones"], [3, 3, "bones"], [3, 1, "bones"]]},
 	"lodge": {"unlock": 30, "name": "Spirit Lodge", "col": "#b8c85a", "cost": [30, 50, 75], "recruit": "shaman", "cap": 1,
 		"objs": [[2, 2, "fire"], [0, 0, "brazier", 1], [4, 0, "brazier", 1], [4, 4, "jar", 1], [1, 1, "bones"], [3, 3, "bones"], [1, 3, "candles"]]},
@@ -101,7 +99,7 @@ const ROOMS := {
 		"objs": [[1, 1, "anvil", 1], [3, 1, "bench", 1], [3, 3, "bench", 1], [1, 3, "gear"], [0, 4, "gear"]]},
 	"armory": {"unlock": 25, "name": "Armory", "col": "#b9c3cd", "cost": [30, 50, 75],
 		"objs": [[0, 0, "rack", 1], [4, 0, "rack", 1], [0, 4, "rack", 1], [4, 4, "rack", 1], [1, 1, "armor", 1], [3, 3, "armor", 1]]},
-	"cistern": {"unlock": 25, "name": "Flooded Cistern", "col": "#4f8fbf", "cost": [30, 50],
+	"cistern": {"unlock": 25, "name": "Flooded Cistern", "col": "#4f8fbf", "cost": [30, 50, 75],
 		"objs": [[1, 1, "pillar", 1], [3, 1, "pillar", 1], [1, 3, "pillar", 1], [3, 3, "pillar", 1]]},
 	"torture": {"unlock": 35, "name": "Torture Chamber", "col": "#b8243c", "cost": [35, 55, 80],
 		"objs": [[1, 1, "rack2", 1], [3, 1, "maiden", 1], [1, 3, "chains"], [3, 3, "blood"], [2, 2, "blood"], [0, 4, "chains"]]},
@@ -111,21 +109,19 @@ const ROOMS := {
 		"objs": [[2, 2, "runecircle"], [0, 0, "shelf", 1], [4, 0, "shelf", 1], [1, 3, "candles"], [3, 3, "candles"], [3, 1, "crystal", 1]]},
 	"trainingyard": {"unlock": 35, "owner": "darklord", "name": "Training Yard", "col": "#a8aec8", "cost": [30, 50, 75],
 		"objs": [[0, 0, "rack", 1], [4, 0, "rack", 1], [1, 1, "armor", 1], [3, 3, "armor", 1], [1, 3, "anvil", 1]]},
-	"oathstone": {"unlock": 45, "owner": "darklord", "name": "Oath Stone", "col": "#b89cff", "cost": [45, 70],
+	"oathstone": {"unlock": 45, "owner": "darklord", "name": "Oath Stone", "col": "#b89cff", "cost": [45, 70, 100],
 		"objs": [[2, 2, "altar"], [1, 1, "pillar", 1], [3, 1, "pillar", 1], [1, 3, "pillar", 1], [3, 3, "pillar", 1], [0, 4, "candles"]]},
-	"maze": {"unlock": 30, "name": "Maze of Bones", "col": "#d8ccb0", "cost": [30, 50],
+	"maze": {"unlock": 30, "name": "Maze of Bones", "col": "#d8ccb0", "cost": [30, 50, 75],
 		"objs": [[0, 0, "bonewall", 1], [4, 0, "bonewall", 1], [1, 1, "bonewall", 1], [3, 1, "bonewall", 1], [1, 3, "bonewall", 1], [3, 3, "bonewall", 1], [0, 4, "bonewall", 1], [4, 4, "bonewall", 1], [2, 2, "bones"]]},
-	"shrine": {"unlock": 35, "name": "Shrine of Desecration", "col": "#7a5a9a", "cost": [35, 55],
+	"shrine": {"unlock": 35, "name": "Shrine of Desecration", "col": "#7a5a9a", "cost": [35, 55, 80],
 		"objs": [[2, 2, "altar"], [0, 0, "brazier", 1], [4, 0, "brazier", 1], [1, 3, "candles"], [3, 3, "candles"], [3, 1, "blood"]]},
-	"stitching": {"unlock": 35, "name": "Stitching Room", "col": "#9a8a6a", "cost": [35, 55],
-		"objs": [[1, 1, "table", 1], [3, 1, "table", 1], [2, 2, "candles"], [0, 4, "chains"], [4, 4, "barrel", 1], [3, 3, "blood"]]},
-	"scrying": {"unlock": 40, "name": "Scrying Pool", "col": "#5fa8c8", "cost": [40, 60],
+	"scrying": {"unlock": 40, "name": "Scrying Pool", "col": "#5fa8c8", "cost": [40, 60, 85],
 		"objs": [[2, 2, "well"], [1, 1, "crystal", 1], [3, 3, "crystal", 1], [1, 3, "candles"], [3, 1, "candles"]]},
-	"ogreden": {"unlock": 40, "name": "Ogre Den", "col": "#8a9a5a", "cost": [40, 65], "recruit": "ogre", "cap": 1,
+	"ogreden": {"unlock": 40, "name": "Ogre Den", "col": "#8a9a5a", "cost": [40, 65, 95], "recruit": "ogre", "cap": 1,
 		"objs": [[0, 0, "cage", 1], [4, 4, "barrel", 1], [1, 1, "meat"], [3, 3, "bones"], [3, 1, "bones"], [0, 4, "rack", 1]]},
 	"library": {"owner": "lich", "name": "Arcane Library", "col": "#9b84ff", "cost": [35, 55, 80],
 		"objs": [[0, 0, "shelf", 1], [4, 0, "shelf", 1], [1, 1, "shelf", 1], [3, 1, "shelf", 1], [0, 4, "shelf", 1], [4, 4, "shelf", 1], [2, 2, "candles"], [1, 3, "candles"]]},
-	"manawell": {"unlock": 40, "owner": "lich", "name": "Mana Well", "col": "#7fb4ff", "cost": [40, 70],
+	"manawell": {"unlock": 40, "owner": "lich", "name": "Mana Well", "col": "#7fb4ff", "cost": [40, 70, 100],
 		"objs": [[2, 2, "well"], [1, 1, "crystal", 1], [3, 3, "crystal", 1], [3, 1, "runecircle"], [1, 3, "runecircle"]]},
 	"phylactery": {"unlock": 55, "owner": "lich", "name": "Phylactery Vault", "col": "#d6c8ff", "cost": [40, 60, 85],
 		"objs": [[1, 1, "pillar", 1], [3, 1, "pillar", 1], [2, 2, "altar"], [1, 3, "candles"], [3, 3, "candles"]]},
@@ -139,17 +135,17 @@ const ROOMS := {
 		"objs": [[1, 1, "tomb", 1], [3, 1, "tomb", 1], [1, 3, "tomb", 1], [3, 3, "tomb", 1], [0, 0, "tomb", 1], [4, 4, "tomb", 1], [2, 2, "bones"]]},
 	"boneforge": {"unlock": 40, "owner": "necro", "name": "Bone Forge", "col": "#cfe8d8", "cost": [35, 55, 80],
 		"objs": [[1, 1, "forge", 1], [3, 1, "anvil", 1], [1, 3, "bones"], [3, 3, "bones"], [4, 4, "bones"]]},
-	"soulcage": {"unlock": 45, "owner": "necro", "name": "Soul Cage", "col": "#58a88a", "cost": [40, 70],
+	"soulcage": {"unlock": 45, "owner": "necro", "name": "Soul Cage", "col": "#58a88a", "cost": [40, 70, 100],
 		"objs": [[1, 1, "cage", 1], [3, 1, "cage", 1], [2, 2, "wisp"], [1, 3, "wisp"]]},
 	"thrallpens": {"owner": "flayer", "name": "Thrall Pens", "col": "#a48ac0", "cost": [30, 50, 70], "recruit": "thrall", "cap": 2,
 		"objs": [[0, 0, "bars", 1], [4, 0, "bars", 1], [0, 4, "bars", 1], [4, 4, "bars", 1], [1, 1, "chains"], [3, 3, "chains"]]},
 	"brainjars": {"unlock": 35, "owner": "flayer", "name": "Brain Jar Gallery", "col": "#c77dff", "cost": [30, 50, 75],
 		"objs": [[0, 0, "jar", 1], [4, 0, "jar", 1], [1, 1, "jar", 1], [3, 1, "jar", 1], [0, 4, "jar", 1], [4, 4, "jar", 1], [2, 2, "runecircle"]]},
-	"amplifier": {"unlock": 50, "owner": "flayer", "name": "Psionic Amplifier", "col": "#f08cff", "cost": [45, 80],
+	"amplifier": {"unlock": 50, "owner": "flayer", "name": "Psionic Amplifier", "col": "#f08cff", "cost": [45, 80, 115],
 		"objs": [[1, 1, "crystal", 1], [3, 3, "crystal", 1], [3, 1, "crystal", 1], [2, 2, "wisp"]]},
 	"clockwork": {"unlock": 35, "owner": "mimic", "name": "Clockwork Forge", "col": "#e4a648", "cost": [30, 50, 75],
 		"objs": [[1, 1, "gearbig", 1], [3, 1, "gearbig", 1], [1, 3, "gear"], [3, 3, "gear"], [2, 2, "gear"]]},
-	"snareden": {"owner": "mimic", "name": "Snare Den", "col": "#b08a5a", "cost": [25, 45],
+	"snareden": {"owner": "mimic", "name": "Snare Den", "col": "#b08a5a", "cost": [25, 45, 65],
 		"objs": [[0, 0, "crate", 1], [4, 4, "crate", 1], [1, 1, "rope"], [3, 3, "rope"], [3, 1, "rope"]]},
 	"runes": {"unlock": 45, "owner": "mimic", "name": "Rune Chamber", "col": "#ff7a3a", "cost": [35, 55, 80],
 		"objs": [[2, 2, "runecircle"], [1, 1, "candles"], [3, 3, "candles"], [0, 4, "crystal", 1]]},
@@ -158,15 +154,15 @@ const EMPTY_OBJS := [[0, 4, "rubble"], [4, 0, "rubble"]]
 
 ## Furniture you can rearrange by day. Heroes walled off from you smash blocking pieces;
 ## a smashed piece leaves rubble that anyone can walk over until you repair it.
-const FIXED_DECOR := ["throne", "stairs_up"]
+const FIXED_DECOR := ["throne"]
 const DECOR_REPAIR := 5   # gold per smashed piece
 const STURDY_DECOR := ["pillar", "cracked", "bonewall", "tomb", "coffin", "forge", "anvil", "maiden", "gearbig", "cage"]
 const DECOR_NAMES := {"rack2": "rack", "gearbig": "great gear", "bonewall": "bone wall", "bigcoffin": "coffin", "bars": "cell bars"}
 
 const TRAPS := {
-	"spikes": {"name": "Spike trap", "cost": 10, "desc": "Hurts every hero that steps on it. Permanent."},
-	"snare": {"name": "Snare", "cost": 8, "desc": "Holds a hero in place through its next turn. Used up."},
-	"rune": {"name": "Blast rune", "cost": 20, "desc": "Explodes in a 3x3 area. Used up."},
+	"spikes": {"name": "Spike trap", "cost": 10, "desc": "Badly hurts the first hero to step on it. Fires once a night, re-arms at dawn."},
+	"snare": {"name": "Snare", "cost": 8, "desc": "Hurts the first hero to step on it and holds it through its next turn. Once a night."},
+	"rune": {"name": "Blast rune", "cost": 20, "desc": "Explodes in a 3x3 area when a hero steps on it. Once a night."},
 }
 
 ## Dread modifiers: picked before a run, each makes it harder and adds to the souls it banks.
@@ -193,7 +189,7 @@ const BOONS := [
 	{"id": "feast", "name": "Blood Feast", "desc": "Heal 8 HP whenever you kill a hero."},
 	{"id": "rituals", "name": "Dark Rituals", "desc": "All your spells recharge 1 turn faster and deal +2 damage."},
 	{"id": "greed", "name": "Greed", "desc": "Heroes drop double gold."},
-	{"id": "jagged", "name": "Jagged Traps", "desc": "Traps deal +8 damage."},
+	{"id": "jagged", "name": "Jagged Traps", "desc": "Traps deal +10 damage."},
 	{"id": "owl", "name": "Night Owl", "desc": "+1 hour of work every day, and 50 gold now."},
 	{"id": "press", "name": "Press Gang", "desc": "An ogre and two goblins join you now. They don't use any room space."},
 ]
@@ -205,13 +201,10 @@ static func col(hex: String, a := 1.0) -> Color:
 	return c
 
 
-## Gold to raise a room from level l to l + 1 (l = 0 builds it). Rooms have no level cap:
-## past the listed prices, each level costs 40% more than the one before.
+## Gold to raise a room from level l to l + 1 (l = 0 builds it). Every room lists three prices
+## and stops at level 3 (Game.MAX_LVL).
 static func room_cost(t: String, l: int) -> int:
-	var c: Array = ROOMS[t].cost
-	if l < c.size():
-		return c[l]
-	return roundi(c.back() * pow(1.4, l - c.size() + 1) / 5.0) * 5
+	return ROOMS[t].cost[l]
 
 
 # ---- level scaling for rooms whose effect isn't a plain multiple of the level
@@ -224,10 +217,6 @@ static func larder_heal(l: int) -> int:
 
 static func phylactery_hp(l: int) -> int:
 	return 0 if l <= 0 else 8 + 6 * (l - 1)
-
-## Hero turns every staircase stays down after the Stairs power (level 3+).
-static func stairs_shut_turns(l: int) -> int:
-	return maxi(2, l - 1)
 
 ## Damage to heroes who start their turn in the Flooded Cistern (level 3+).
 static func cistern_drown(l: int) -> int:
@@ -284,19 +273,19 @@ static func roman(n: int) -> String:
 	return o
 
 
+## Blast rune damage with a Rune Chamber at level l (a Workshop's runes count as level 1).
+static func rune_dmg(l: int) -> int:
+	return 14 + 6 * maxi(1, l)
+
 static func room_eff(t: String, l: int) -> String:
 	match t:
 		"lair": return "You start each fight on your throne and take 1 less damage while in here." + (" +%d max HP." % ((l - 1) * 6) if l > 1 else "")
-		"stairs":
-			if l == 1: return "Leads up to a new floor. One per floor; the floor above starts where these stairs arrive."
-			if l == 2: return "Spiral stair: heroes who climb it stop at the top for the rest of their turn."
-			return "Spiral stair. Once per fight you can also collapse every staircase for %d turns." % stairs_shut_turns(l)
 		"treasury": return "+%d gold every dawn. Rogues try to rob it and run." % treasury_gold(l)
 		"larder": return "Heal %d HP every dawn." % larder_heal(l)
-		"barracks": return "Recruit up to %d goblins." % (l * 2)
-		"lodge": return "Recruit up to %d goblin shaman%s. At the start of your turn, each heals your units within 2 tiles for %d HP." % [l, "s" if l > 1 else "", shaman_mend(l)]
-		"coven": return "Recruit up to %d warlock%s. Their bolts ignore armor" % [l, "s" if l > 1 else ""] + (" and deal +%d damage." % (l - 1) if l > 1 else ".")
-		"kennel": return "Recruit up to %d hellhound%s. Fast hunters." % [l, "s" if l > 1 else ""]
+		"barracks": return "Comes with %d goblins." % (l * 2)
+		"lodge": return "Comes with %d goblin shaman%s. At the start of your turn, each heals your units within 2 tiles for %d HP." % [l, "s" if l > 1 else "", shaman_mend(l)]
+		"coven": return "Comes with %d warlock%s. Their bolts ignore armor" % [l, "s" if l > 1 else ""] + (" and deal +%d damage." % (l - 1) if l > 1 else ".")
+		"kennel": return "Comes with %d hellhound%s. Fast hunters." % [l, "s" if l > 1 else ""]
 		"workshop": return "Room for %d traps. Unlocks %s." % [3 + l * 3, ["spikes", "spikes and snares", "spikes, snares and blast runes"][mini(l, 3) - 1]]
 		"armory": return "Your minions deal +%d damage." % l
 		"cistern": return "Heroes in this room move %d tile%s less." % [l, "s" if l > 1 else ""] + (" They take %d damage at the start of each turn in the water." % cistern_drown(l) if l >= 3 else "")
@@ -307,22 +296,21 @@ static func room_eff(t: String, l: int) -> String:
 		"oathstone": return "The bond between the Dark Lord and his Squire reaches %d tiles." % oath_range(l) + (" While bonded, a hit on one heals the other %d HP." % oath_heal(l) if l >= 2 else "")
 		"maze": return "Heroes who wander in lose their way and stop for the turn." + (" They can't attack that turn either." if l > 1 else "") + (" They also take %d damage." % maze_dmg(l) if l >= 3 else "")
 		"shrine": return "Holy heroes inside lose their holy bonus and take %d damage a turn. Clerics can't heal in here." % l
-		"stitching": return "At dawn, sew %s that died last night back together for half its cost." % ("one minion" if l == 1 else "up to %d minions" % l)
 		"scrying": return ("See tomorrow night's raiders." if l == 1 else "See the raiders of the next %d nights." % l) + (" Foreseen heroes arrive with %d%% less HP." % roundi(scry_shaken(l) * 100) if l >= 3 else "")
-		"ogreden": return "Recruit up to %d ogre%s: 30 HP, slow, hits for 6. Good for plugging a doorway." % [l, "s" if l > 1 else ""]
+		"ogreden": return "Comes with %d ogre%s: 30 HP, slow, hits for 6. Good for plugging a doorway." % [l, "s" if l > 1 else ""]
 		"library": return "Your spells deal +%d damage." % (l * 2)
 		"manawell": return "Your spells recharge %d turn%s faster." % [l, "s" if l > 1 else ""] + (" Your spells deal +%d damage." % well_dmg(l) if l >= 3 else "")
 		"phylactery": return "Once per fight, when you die, reform at the altar with %d HP." % phylactery_hp(l)
-		"crypt": return "Recruit up to %d vampire spawn. They drink blood too." % (l * 2)
+		"crypt": return "Comes with %d vampire spawn. They drink blood too." % (l * 2)
 		"bloodpool": return "Your claws deal +%d damage." % (l * 2)
 		"coffin": return "+%d max HP." % (l * 8)
-		"graveyard": return "Recruit up to %d skeletons. Cheap and plentiful." % (l * 3)
+		"graveyard": return "Comes with %d skeletons. Cheap and plentiful." % (l * 3)
 		"boneforge": return "All your undead get +%d HP and +%d damage." % [l * 2, l]
 		"soulcage": return "Raise Dead recharges 1 turn faster." if l == 1 else "Raise Dead recharges faster and raises %d skeletons." % soul_skeletons(l)
-		"thrallpens": return "Recruit up to %d brainwashed thralls." % (l * 2)
+		"thrallpens": return "Comes with %d brainwashed thralls." % (l * 2)
 		"brainjars": return "Psychic Lash deals +%d damage." % (l * 2)
 		"amplifier": return ("Dominate recharges 1 turn faster." if l == 1 else "Dominate recharges faster and works on bosses.") + (" Your thralls deal +%d damage." % amp_dmg(l) if l >= 3 else "")
-		"clockwork": return "All your traps deal +%d damage." % (l * 2)
+		"clockwork": return "All your traps deal +%d damage." % (l * 4)
 		"snareden": return "Unlocks snares. +%d trap slots." % (l * 3)
-		"runes": return "Unlocks blast runes (%d damage in 3x3). +%d trap slots." % [6 + l * 3, l * 2]
+		"runes": return "Unlocks blast runes (%d damage in 3x3). +%d trap slots." % [rune_dmg(l), l * 2]
 	return ""

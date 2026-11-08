@@ -10,7 +10,7 @@ extends Node
 ##   slot          chamber to pulse on the map
 ##   sel           chamber to select when the step starts
 ##   allow         actions allowed during the step (see Game.allowed); "*" allows everything
-##   need          gold the step needs; a stash tops the player up. "dig" means the dig cost
+##   need          gold the step needs; a stash tops the player up
 ##   party         index into PARTIES: tonight's raiders, set when the step starts
 ##   next          button label; the player presses it to move on
 ##   done          Callable that returns true when the step is complete
@@ -28,7 +28,6 @@ var ui              # main.gd
 var steps: Array = []
 var coach: PanelContainer
 var _box: VBoxContainer
-var _goblins := 0     # goblins when the current step began
 
 
 func build(main_ui) -> void:
@@ -87,21 +86,16 @@ func skip() -> void:
 
 func _enter() -> void:
 	var s := step()
-	Game.trap_mode = ""
-	Game.ent_mode = false
-	Game.sel_minion = null
-	Game.decor_room = -1
-	Game.decor_pick = null
+	Game.clear_modes()
 	if s.has("party"):
 		Game.party = PARTIES[s.party].duplicate()
 	if s.has("need"):
-		var need: int = Game.dig_cost() if str(s.need) == "dig" else s.need
+		var need: int = s.need
 		if Game.gold < need:
 			Game.add_log("Your servants dig up a forgotten stash: +%d gold." % (need - Game.gold), "info")
 			Game.gold = need
 	if s.has("sel"):
 		Game.sel = s.sel
-	_goblins = Game.count_of("goblin")
 	ui.board.hint_slot = s.get("slot", -1)
 	_render()
 	ui.side.scroll_vertical = 0
@@ -180,9 +174,6 @@ func _dawned(day: int) -> Callable:
 func _built(si: int, t: String) -> Callable:
 	return func(): return Game.slots[si].get("type", "") == t
 
-func _dug(si: int) -> Callable:
-	return func(): return Game.slots[si].state != "rock"
-
 func _nightfall(text: String) -> Dictionary:
 	return {"title": "Let night fall", "text": text, "allow": ["night"],
 		"done": func(): return ui.night}
@@ -197,37 +188,35 @@ func _greet(day: int, text := "Night survived. Press Greet the dawn to start the
 
 func _lay_spikes() -> void:
 	Game.trap_mode = "spikes"
-	Game.place_trap(Vector2i(11, 2))
-	Game.place_trap(Vector2i(13, 2))
+	Game.place_trap(Vector2i(6, 2))
+	Game.place_trap(Vector2i(8, 2))
 	Game.trap_mode = ""
 
 func _set_snare() -> void:
 	Game.trap_mode = "snare"
-	Game.place_trap(Vector2i(12, 7))
+	Game.place_trap(Vector2i(7, 7))
 	Game.trap_mode = ""
 
 func _make_steps() -> Array:
 	return [
-		# ---- day 1: a barracks, a goblin and room to grow
-		{"title": "Welcome, Vampire Lord", "slot": 12, "party": 0, "next": "Let's begin",
-			"text": "This is your lair, deep under the village. Heroes break in through the glowing gate at the top and fight their way down to your throne. For the next five nights this tutorial tells you what to build. After that, the run is yours."},
-		{"title": "Build a barracks", "slot": 7, "allow": ["build:7:barracks"], "need": 25,
-			"text": "Click the empty chamber just above your lair, then choose Goblin Barracks in the panel. Every build takes 1 of your 3 daily hours, plus gold.",
-			"done": _built(7, "barracks"), "act": func(): Game.build(7, "barracks")},
-		{"title": "Recruit a goblin", "slot": 7, "sel": 7, "allow": ["recruit:goblin"], "need": 12,
-			"text": "With the barracks selected, click Recruit goblin. Minions cost gold but no time, and fight beside you every night. If they die, they stay dead.",
-			"done": func(): return Game.count_of("goblin") >= 1, "act": func(): Game.recruit("goblin")},
-		{"title": "Post your goblin", "slot": 2,
-			"text": "Click your goblin on the map, then click a tile in the top chamber. That's where it stands guard when the heroes arrive.",
-			"done": func(): return Game.minions.any(func(m): return Game.slot_of(m.post) == 2),
-			"act": func(): Game.minions[0].post = Vector2i(12, 3)},
-		{"title": "Dig deeper", "slot": 6, "allow": ["dig:6"], "need": "dig",
-			"text": "Click the rock to the left of the barracks and dig it out. More chambers make a longer, deadlier road to your throne. Each dig costs a little more than the last.",
-			"done": _dug(6), "act": func(): Game.dig(6)},
-		{"title": "Dig once more", "slot": 8, "allow": ["dig:8"], "need": "dig",
-			"text": "Spend your last hour digging out the rock to the right of the barracks.",
-			"done": _dug(8), "act": func(): Game.dig(8)},
-		_nightfall("You're out of hours. Press Let night fall below the map. Three peasants are coming."),
+		# ---- day 1: a barracks and its goblins, and room to grow
+		{"title": "Welcome, Vampire Lord", "slot": 7, "party": 0, "next": "Let's begin",
+			"text": "This is your throne room, deep under the village. Heroes break in through the glowing gate at the top and fight their way down to your throne. For the next five nights this tutorial tells you what to build. After that, the run is yours."},
+		{"title": "Build a barracks", "slot": 4, "allow": ["build:4:barracks"], "need": 25,
+			"text": "Click the empty chamber just above your throne room, then choose Goblin Barracks in the panel. Every build takes 1 of your 3 daily hours, plus gold. The barracks comes with two goblins, free.",
+			"done": _built(4, "barracks"), "act": func(): Game.build(4, "barracks")},
+		{"title": "Post your goblin", "slot": 1,
+			"text": "Your goblins fight beside you every night, and if one dies the barracks replaces it at dawn. Click a goblin on the map, then click a tile in the top chamber. That's where it stands guard when the heroes arrive.",
+			"done": func(): return Game.minions.any(func(m): return Game.slot_of(m.post) == 1),
+			"act": func(): Game.minions[0].post = Vector2i(7, 3)},
+		{"title": "Build a Trap Workshop", "slot": 3, "allow": ["build:3:workshop"], "need": 25,
+			"text": "Click the rock to the left of the barracks. No digging needed: rooms go straight into the rock next to your dungeon. Build a Trap Workshop there. It lets you lay traps. Traps stay put for the whole run and re-arm every night.",
+			"done": _built(3, "workshop"), "act": func(): Game.build(3, "workshop")},
+		{"title": "Lay spike traps", "slot": 1, "allow": ["trap"], "need": 20,
+			"text": "In the Traps panel, pick Spike trap, then click two open tiles in the top chamber where the heroes come in. A spike trap fires once a night, badly hurting the first hero that steps on it. Traps cost gold but no time.",
+			"done": func(): return Game.traps.size() >= 2,
+			"act": _lay_spikes},
+		_nightfall("Press Let night fall below the map. Three peasants are coming. Hours you don't spend are lost at nightfall."),
 
 		# ---- night 1: moving, ending the turn, reading heroes, attacking
 		{"title": "Your turn", "night": true,
@@ -247,43 +236,27 @@ func _make_steps() -> Array:
 		# ---- day 2: traps and upgrades
 		{"title": "Dawn", "party": 1, "next": "Next",
 			"text": "Every dawn brings 3 fresh hours, and the frightened villagers leave 10 gold at the cave mouth. Heroes you kill drop gold too. Tonight an archer joins the peasants."},
-		{"title": "Build a Trap Workshop", "slot": 6, "allow": ["build:6:workshop"], "need": 25,
-			"text": "Click the chamber left of the barracks and build a Trap Workshop. It lets you lay traps, and traps stay put for the whole run.",
-			"done": _built(6, "workshop"), "act": func(): Game.build(6, "workshop")},
-		{"title": "Lay spike traps", "slot": 2, "allow": ["trap"], "need": 20,
-			"text": "In the Traps panel, pick Spike trap, then click two open tiles in the top chamber where the heroes come in. Spikes hurt every hero that steps on them. Traps cost gold but no time.",
-			"done": func(): return Game.traps.size() >= 2,
-			"act": _lay_spikes},
-		{"title": "Upgrade your lair", "slot": 12, "allow": ["upgrade:12"], "need": 40,
-			"text": "Click your lair and upgrade it. Upgrades make a room stronger: a level 2 lair gives you 6 more max HP.",
-			"done": func(): return Game.lvl("lair") >= 2, "act": func(): Game.upgrade(12)},
-		{"title": "Make room for tomorrow", "slot": 11, "allow": ["dig:11"], "need": "dig",
-			"text": "Dig out the rock to the left of your lair. You'll build something special there tomorrow.",
-			"done": _dug(11), "act": func(): Game.dig(11)},
+		{"title": "Upgrade your throne room", "slot": 7, "allow": ["upgrade:7"], "need": 40,
+			"text": "Click your throne room and upgrade it. Upgrades make a room stronger: a level 2 throne room gives you 6 more max HP.",
+			"done": func(): return Game.lvl("lair") >= 2, "act": func(): Game.upgrade(7)},
+		{"title": "Build a Larder", "slot": 5, "allow": ["build:5:larder"], "need": 20,
+			"text": "Click the rock to the right of the barracks and build a Larder. It heals you every dawn, so you start each night stronger.",
+			"done": _built(5, "larder"), "act": func(): Game.build(5, "larder")},
 		_nightfall("Press Let night fall. Archers shoot from 4 tiles away, but walls and furniture block their arrows."),
 
 		# ---- night 2
 		{"title": "Mind the archer", "night": true,
-			"text": "Watch the heroes walk over your spikes. Keep out of the archer's line of fire, and close in from behind a wall or a corner.",
+			"text": "Watch the first heroes walk onto your spikes. Keep out of the archer's line of fire, and close in from behind a wall or a corner.",
 			"done": _won_night},
 		_greet(3),
 
 		# ---- day 3: signature room, more minions, healing
-		{"title": "Your own rooms", "slot": 11, "party": 2, "allow": ["build:11:crypt"], "need": 35,
-			"text": "Each monster has signature rooms only it can build. Click the chamber left of your lair and build a Crypt of Brides. It houses vampire spawn, minions that drink blood like you.",
-			"done": _built(11, "crypt"), "act": func(): Game.build(11, "crypt")},
-		{"title": "Recruit vampire spawn", "slot": 11, "sel": 11, "allow": ["recruit:spawn"], "need": 24,
-			"text": "With the crypt selected, recruit a vampire spawn.",
-			"done": func(): return Game.count_of("spawn") >= 1, "act": func(): Game.recruit("spawn")},
-		{"title": "Build a Larder", "slot": 8, "allow": ["build:8:larder"], "need": 20,
-			"text": "Click the chamber right of the barracks and build a Larder. It heals you every dawn, so you start each night stronger.",
-			"done": _built(8, "larder"), "act": func(): Game.build(8, "larder")},
-		{"title": "Grow the barracks", "slot": 7, "sel": 7, "allow": ["upgrade:7"], "need": 40,
-			"text": "Click the Goblin Barracks and upgrade it. Level 2 houses 4 goblins.",
-			"done": func(): return Game.lvl("barracks") >= 2, "act": func(): Game.upgrade(7)},
-		{"title": "One more goblin", "slot": 7, "sel": 7, "allow": ["recruit:goblin"], "need": 12,
-			"text": "Recruit another goblin. Minions that died in earlier nights are gone for good, so keep your ranks filled.",
-			"done": func(): return Game.count_of("goblin") > _goblins, "act": func(): Game.recruit("goblin")},
+		{"title": "Your own rooms", "slot": 6, "party": 2, "allow": ["build:6:crypt"], "need": 35,
+			"text": "Each monster has signature rooms only it can build. Click the rock left of your throne room and build a Crypt of Brides. It comes with two vampire spawn, minions that drink blood like you.",
+			"done": _built(6, "crypt"), "act": func(): Game.build(6, "crypt")},
+		{"title": "Grow the barracks", "slot": 4, "sel": 4, "allow": ["upgrade:4"], "need": 40,
+			"text": "Click the Goblin Barracks and upgrade it. Level 2 houses 4 goblins, and the two new ones move in at once.",
+			"done": func(): return Game.lvl("barracks") >= 2, "act": func(): Game.upgrade(4)},
 		_nightfall("A rogue comes tonight. Rogues spot traps and step around them, so your minions will have to catch it."),
 
 		# ---- night 3: spells
@@ -297,15 +270,15 @@ func _make_steps() -> Array:
 		_greet(4),
 
 		# ---- day 4: snares, then a free choice
-		{"title": "Snares", "slot": 6, "party": 3, "allow": ["upgrade:6"], "need": 40,
+		{"title": "Snares", "slot": 3, "party": 3, "allow": ["upgrade:3"], "need": 40,
 			"text": "Upgrade the Trap Workshop. Level 2 unlocks snares and room for more traps.",
-			"done": func(): return Game.lvl("workshop") >= 2, "act": func(): Game.upgrade(6)},
-		{"title": "Set a snare", "slot": 7, "allow": ["trap"], "need": 8,
-			"text": "Pick Snare in the Traps panel and place one in the chamber above your lair. A snare holds a hero in place for a turn, so your minions can gang up on it.",
+			"done": func(): return Game.lvl("workshop") >= 2, "act": func(): Game.upgrade(3)},
+		{"title": "Set a snare", "slot": 4, "allow": ["trap"], "need": 8,
+			"text": "Pick Snare in the Traps panel and place one in the chamber above your throne room. A snare holds a hero in place for a turn, so your minions can gang up on it.",
 			"done": func(): return Game.traps.values().has("snare"),
 			"act": _set_snare},
 		{"title": "Your choice", "allow": ["*"],
-			"text": "You have 2 hours left. Spend them however you like: dig, build, upgrade or recruit. Then let night fall. A knight is coming, and its armor blocks 1 damage from every hit.",
+			"text": "You have 2 hours left. Spend them however you like: build or upgrade. Then let night fall. A knight is coming, and its armor blocks 1 damage from every hit.",
 			"done": func(): return ui.night},
 
 		# ---- night 4
@@ -316,7 +289,7 @@ func _make_steps() -> Array:
 
 		# ---- day 5: the boss
 		{"title": "Boss night", "party": 4, "next": "Next",
-			"text": "Every fifth night a boss leads the raid. Tonight it's a Paladin: lots of health, 2 armor, and holy, so it hits vampires for 3 extra damage. Beat it and you can build Stairs Up to raise a new floor."},
+			"text": "Every fifth night a boss leads the raid. Tonight it's a Paladin: lots of health, 2 armor, and holy, so it hits vampires for 3 extra damage. Beat it and the village will think twice."},
 		{"title": "Prepare", "allow": ["*"], "need": 120,
 			"text": "Today is yours, and your servants have found extra gold for it. A Paladin beats you in a straight fight, so fill your crypt and barracks with minions and line the halls with traps. Let night fall when you're ready.",
 			"done": func(): return ui.night},
@@ -328,5 +301,5 @@ func _make_steps() -> Array:
 		_boon(6),
 
 		{"title": "Tutorial complete", "next": "Finish",
-			"text": "You know the basics. This run is yours now, so keep going as long as you can. After a boss night, empty chambers can hold Stairs Up. Between runs, spend souls in the Room catalog to unlock new rooms."},
+			"text": "You know the basics. This run is yours now, so keep going as long as you can. When you run out of chambers, expand the dungeon from the Layout panel. Between runs, spend souls in the Room catalog to unlock new rooms."},
 	]

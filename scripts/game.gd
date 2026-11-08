@@ -5,16 +5,28 @@ signal changed
 signal logged
 signal tipped(text: String, warn: bool)
 
-const SW := 5
-const SH := 4
+## The dungeon is one grid of 5x5 chambers. It starts 3x3 and grows a row or column at a time
+## (see expand()).
 const RS := 5
-const BW := SW * RS
-const BH := SH * RS          # tile rows per floor
-const FLOOR_SLOTS := SW * SH
+const START_SIDE := 3
+## No side of the dungeon grows past this many chambers.
+const MAX_SIDE := 7
+## Gold per chamber an expansion adds.
+const EXPAND_GOLD := 10
+## Which way each expansion side grows.
+const SIDES := {"n": Vector2i(0, -1), "s": Vector2i(0, 1), "w": Vector2i(-1, 0), "e": Vector2i(1, 0)}
+var SW := START_SIDE          # chambers across
+var SH := START_SIDE          # chambers down
+var BW := SW * RS             # tile columns
+var BH := SH * RS             # tile rows
 ## Nights between boss nights; Restless Crusade makes it 4. See boss_every().
 const BOSS_EVERY := 5
 ## A dark boon is earned every this many nights survived (not tied to Restless Crusade).
 const BOON_EVERY := 5
+## Surviving this night wins the run.
+const WIN_NIGHT := 50
+## Rooms top out at this level.
+const MAX_LVL := 3
 ## Dread modifiers unlock once a run has survived this many nights (that is, reached night 5).
 const MODS_UNLOCK_BEST := 4
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -22,9 +34,9 @@ const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 var meta_path := "user://meta.json"
 ## Where the run in progress is saved. Tests point it elsewhere.
 var run_path := "user://run.save"
-## Everything a run needs to resume. Layout, furniture and stairs are rebuilt from slots.
+## Everything a run needs to resume. Layout and furniture are rebuilt from slots.
 const RUN_KEYS := ["mk", "day", "hours", "gold", "mhp", "mmax", "souls", "kills", "logs", "taken", "b",
-	"slots", "traps", "minions", "entrance", "floors", "bosses", "party", "_uid", "tut", "mods", "future", "fallen", "shp", "smax", "down"]
+	"slots", "traps", "minions", "entrance", "party", "_uid", "tut", "mods", "future", "shp", "smax", "down", "SW", "SH", "bosses"]
 
 var meta := {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
 ## The Dread modifiers this run was started with (ids from Data.MODS).
@@ -55,22 +67,18 @@ var slots := []
 var traps := {}      # Vector2i -> trap type
 var minions := []    # {mid, kind, home, post, free}
 var obj := {}        # Vector2i -> {kind, block}
-var entrance := Vector2i(12, 0)
-## Floors are stacked in one coordinate space: floor f covers tile rows f*BH to f*BH+BH-1.
-## Floor 0 is the ground floor with the surface entrance; higher indexes are higher up the tower.
-var floors := 1
-var bosses := 0              # boss nights survived; each one allows one more floor
-var links := {}              # Vector2i -> Vector2i, the stairs between floors
-var stairs_shut := 0         # turns left with every staircase collapsed
+var entrance := Vector2i(SW / 2 * RS + 2, 0)
+## Boss nights survived. Each one earns one expansion of the dungeon.
+var bosses := 0
 var party := []
 var future := []     # the raiders of the next nights, so the Scrying Pool can show them
-var fallen := []     # kinds of the minions that died last night, for the Stitching Room
 var sel := -1
 var sel_minion = null
 var trap_mode := ""
 var ent_mode := false
-var decor_room := -1      # room whose furniture is being rearranged, or -1
-var decor_pick = null     # tile of the piece picked up in that room
+## "minions" or "furniture" while the player is rearranging the dungeon, else "".
+var arrange := ""
+var decor_pick = null     # tile of the furniture piece picked up, or null
 var _uid := 0
 ## The tutorial step this run is on, or -1 for a normal run. Saved with the run.
 var tut := -1
@@ -103,6 +111,11 @@ func load_meta() -> void:
 	if d is Dictionary:
 		for k in d:
 			meta[k] = d[k] if d[k] is Array else int(d[k])
+	# the Stitching Room was removed when minions became free; give back what it cost
+	if "stitching" in meta.rooms:
+		meta.rooms.erase("stitching")
+		meta.souls += 35
+		save_meta()
 
 
 func save_meta() -> void:
@@ -142,6 +155,11 @@ func _read_run() -> Dictionary:
 	var d = str_to_var(FileAccess.get_file_as_string(run_path))
 	if not d is Dictionary or not Data.MONSTERS.has(d.get("mk", "")):
 		return {}
+	# a run saved on a different layout (several floors, or the old 5x4 grid) can't be resumed
+	var sl = d.get("slots", [])
+	var per := int(d.get("SW", START_SIDE)) * int(d.get("SH", START_SIDE))
+	if not sl is Array or int(d.get("floors", 1)) != 1 or sl.size() != per:
+		return {}
 	return d
 
 ## Monster and night of the saved run, for the Continue button. Empty if there is none.
@@ -155,22 +173,24 @@ func load_run() -> bool:
 		return false
 	mods = []        # keys an older save may lack
 	future = []
-	fallen = []
 	shp = 0
 	smax = 0
 	down = []
+	bosses = 0
+	SW = START_SIDE
+	SH = START_SIDE
 	for k in RUN_KEYS:
 		if d.has(k):
 			set(k, d[k])
+	_set_dims(SW, SH)
 	M = Data.MONSTERS[mk]
-	stairs_shut = 0
+	for i in slots.size():
+		if not Data.ROOMS.has(slots[i].get("type", "lair")):
+			slots[i] = {"state": "dug"}   # a room type that no longer exists
 	sel = slot_idx("lair")
-	sel_minion = null
-	trap_mode = ""
-	ent_mode = false
-	decor_room = -1
-	decor_pick = null
+	clear_modes()
 	rebuild_objs()
+	fill_rooms()
 	changed.emit()
 	logged.emit()
 	return true
@@ -201,29 +221,26 @@ func new_run(key: String, with_mods := []) -> void:
 	taken = []
 	b = {"atk": 0, "spell": 0, "move": 0, "minion": 0, "feast": 0, "cd": 0, "greed": 0.0, "trap": 0, "hours": 0, "minion_hp": 0}
 	hours = day_hours()
-	slots = []
-	floors = 0
+	_set_dims(START_SIDE, START_SIDE)
 	bosses = 0
-	stairs_shut = 0
-	_add_floor()
+	slots = []
+	for i in SW * SH:
+		slots.append({"state": "rock"})
 	traps = {}
 	minions = []
-	entrance = Vector2i(2 * RS + 2, 0)
-	slots[2] = {"state": "dug"}
-	slots[7] = {"state": "dug"}
-	slots[12] = {"state": "built", "type": "lair", "lvl": 1}
+	# the gate in the middle of the top edge, a hall below it, and the lair at the bottom
+	var mid := SW / 2
+	entrance = Vector2i(mid * RS + 2, 0)
+	slots[mid] = {"state": "dug"}
+	slots[mid + SW] = {"state": "dug"}
+	slots[mid + 2 * SW] = {"state": "built", "type": "lair", "lvl": 1}
 	rebuild_objs()
-	sel = 12
-	sel_minion = null
-	trap_mode = ""
-	ent_mode = false
-	decor_room = -1
-	decor_pick = null
+	sel = mid + 2 * SW
+	clear_modes()
 	tut = -1
-	fallen = []
 	party = make_party(1)
 	future = [make_party(2), make_party(3)]
-	add_log("%s has claimed a damp cave. The village has noticed." % M.name, "info")
+	add_log("%s has claimed a damp cave. The village has noticed. Hold it for %d nights." % [M.name, WIN_NIGHT], "info")
 	changed.emit()
 
 
@@ -261,18 +278,44 @@ func kill_gold(base: int) -> int:
 	return maxi(1, g / 2) if has_mod("lean") else g
 
 
-## Hero HP multiplier for night d. Gentle early, curving upward so the real ramp lands around nights 15-20.
+## Hero HP multiplier for night d. Paced for a 50-night run: about x2.4 by night 15, x5 by 30, x10 by 50.
 static func hero_hp_mult(d: int) -> float:
 	var n := d - 1
-	return 1.0 + 0.07 * n + 0.005 * n * n
+	return 1.0 + 0.07 * n + 0.0025 * n * n
 
-## Flat attack bonus heroes get on night d: none through night 5, then +1 every 3 nights,
-## plus an extra +1 every 3 nights past night 12.
+## Flat attack bonus heroes get on night d: none through night 5, then +1 every 3 nights
+## (+15 by night 50).
 static func hero_atk_bonus(d: int) -> int:
-	return maxi(0, d - 5) / 3 + maxi(0, d - 12) / 3
+	return maxi(0, d - 5) / 3
+
+## From this night on the village mob is gone: raids are small adventuring companies of veterans.
+const PARTY_NIGHT := 15
+## Veterans carry this much more HP (and +1 attack) than the mob heroes of the same night.
+const VETERAN_HP := 1.6
+
+static func is_company(d: int) -> bool:
+	return d >= PARTY_NIGHT
 
 static func party_size(d: int) -> int:
+	if is_company(d):
+		return 5 if d < 20 else 6
 	return mini(9, 3 + int(d * 0.45) + maxi(0, d - 12) / 4)
+
+## Extra HP multiplier for veterans of an adventuring company.
+static func veteran_hp(d: int) -> float:
+	return VETERAN_HP if is_company(d) else 1.0
+
+## Gold a veteran drops is scaled up with its HP, so smaller parties pay the same.
+static func veteran_gold(d: int, base: int) -> int:
+	return roundi(base * veteran_hp(d))
+
+const COMPANY_NAMES := ["The Silver Lances", "The Ashen Oath", "The Gilded Hand", "The Wolves of Varn",
+	"The Last Lantern", "The Crimson Vow", "The Order of the Thorn", "The Free Blades", "The Dawnbreakers",
+	"The Iron Pilgrims", "The Grey Company", "The Sworn of Saint Odile"]
+
+## A stable name for an adventuring company, read off its members so saves need no extra field.
+static func company_name(list: Array) -> String:
+	return COMPANY_NAMES[absi(hash(",".join(list))) % COMPANY_NAMES.size()]
 
 ## The first night each hero type can join a raid. Night 1 is all peasants; nights 2-5 add archers
 ## (plus the boss); after that, one or two new types turn up every night or so.
@@ -299,18 +342,33 @@ static func pick_hero(d: int) -> String:
 			return k
 	return "archer"
 
+## A company has a shape: someone to hold the line, a healer, a ranged hitter and a specialist,
+## filled out with whoever else signed on. Front-liners walk through the gate first.
+static func make_company(d: int) -> Array:
+	var list: Array = [["knight", "barbarian"].pick_random(), ["rogue", "sapper"].pick_random(),
+		["archer", "mage"].pick_random(), "cleric"]
+	while list.size() < party_size(d):
+		var k := pick_hero(d)
+		if k == "cleric" and "cleric" in list:
+			continue   # one healer per company keeps fights from dragging
+		list.insert(1, k)
+	return list
+
 func make_party(d: int) -> Array:
 	var size: int = party_size(d)
 	var list := []
-	for i in size:
-		list.append(pick_hero(d))
+	if is_company(d):
+		list = make_company(d)
+	else:
+		for i in size:
+			list.append(pick_hero(d))
 	if is_boss_night(d): list[0] = "paladin"
 	if is_boss_night(d) and d % (boss_every() * 2) == 0 and list.size() > 1: list[1] = "paladin"
 	if has_mod("crowded"): list.append(pick_hero(d))
 	return list
 
 
-## Highest level of a room type anywhere in the dungeon. Copies on other floors do not stack.
+## Level of a room type in the dungeon (0 if it isn't built).
 func lvl(t: String) -> int:
 	var best := 0
 	for s in slots:
@@ -318,32 +376,24 @@ func lvl(t: String) -> int:
 			best = maxi(best, s.lvl)
 	return best
 
-func rows() -> int:
-	return BH * floors
-
-func floor_of(p: Vector2i) -> int:
-	return p.y / BH
-
-func floor_of_slot(si: int) -> int:
-	return si / FLOOR_SLOTS
-
-func _add_floor() -> void:
-	for i in FLOOR_SLOTS:
-		slots.append({"state": "rock"})
-	floors += 1
-
-func floor_type_count(t: String, f: int) -> int:
+func type_count(t: String) -> int:
 	var n := 0
-	for i in range(f * FLOOR_SLOTS, (f + 1) * FLOOR_SLOTS):
-		if slots[i].get("type", "") == t:
+	for sl in slots:
+		if sl.get("type", "") == t:
 			n += 1
 	return n
 
 
 # ---------------------------------------------------------------- geometry
 
+func _set_dims(w: int, h: int) -> void:
+	SW = w
+	SH = h
+	BW = w * RS
+	BH = h * RS
+
 func in_b(p: Vector2i) -> bool:
-	return p.x >= 0 and p.y >= 0 and p.x < BW and p.y < BH * floors
+	return p.x >= 0 and p.y >= 0 and p.x < BW and p.y < BH
 
 func slot_of(p: Vector2i) -> int:
 	return (p.y / RS) * SW + (p.x / RS)
@@ -377,9 +427,9 @@ func slot_idx(t: String) -> int:
 			return i
 	return -1
 
-## The outer edge of floor 1, the only place the surface entrance can go.
+## The outer edge of the dungeon, the only place the surface entrance can go.
 func on_border(p: Vector2i) -> bool:
-	return p.y < BH and (p.x == 0 or p.y == 0 or p.x == BW - 1 or p.y == BH - 1)
+	return in_b(p) and (p.x == 0 or p.y == 0 or p.x == BW - 1 or p.y == BH - 1)
 
 func man(a: Vector2i, c: Vector2i) -> int:
 	return absi(a.x - c.x) + absi(a.y - c.y)
@@ -389,8 +439,6 @@ func wall_between(a: Vector2i, c: Vector2i) -> bool:
 		return true
 	if slot_of(a) == slot_of(c):
 		return false
-	if floor_of(a) != floor_of(c):
-		return true
 	# doorways are the middle three tiles of each shared wall
 	var l: int = (a.y % RS) if a.x != c.x else (a.x % RS)
 	return l < 1 or l > 3
@@ -446,28 +494,32 @@ func field(srcs: Array, thru := false) -> Dictionary:
 			q.append(n)
 	return F
 
-## Tiles a unit standing on p can walk to in one step, including taking the stairs.
+## Tiles a unit standing on p can walk to in one step.
+## The returned array is shared with the cache: read it, never change it.
 func steps(p: Vector2i, thru := false) -> Array:
+	var cache: Dictionary = _nav[1 if thru else 0]
+	var hit = cache.get(p)
+	if hit != null:
+		return hit
+	var o := _steps(p, thru)
+	cache[p] = o
+	return o
+
+func _steps(p: Vector2i, thru: bool) -> Array:
 	var o := []
 	for d in DIRS:
 		var n: Vector2i = p + d
 		if can_step_thru(p, n) if thru else can_step(p, n):
 			o.append(n)
-	if stairs_shut <= 0 and links.has(p) and (_passable(links[p]) if thru else is_open(links[p])):
-		o.append(links[p])
 	return o
-
-func is_link(a: Vector2i, c: Vector2i) -> bool:
-	return links.get(a, Vector2i(-1, -1)) == c
 
 func slot_neighbors(si: int) -> Array:
 	var s := slot_xy(si)
-	var row := s.y % SH
 	var o := []
 	if s.x > 0: o.append(si - 1)
 	if s.x < SW - 1: o.append(si + 1)
-	if row > 0: o.append(si - SW)
-	if row < SH - 1: o.append(si + SW)
+	if s.y > 0: o.append(si - SW)
+	if s.y < SH - 1: o.append(si + SW)
 	return o
 
 ## A built room's own furniture, as [x, y, kind, blocks, broken] in room-local tiles. Copied
@@ -481,7 +533,15 @@ func room_objs(si: int) -> Array:
 		s.objs = out
 	return s.objs
 
+## Bumped whenever furniture is rebuilt, so the board knows to redraw its cached map.
+var map_ver := 0
+## Each tile's walkable neighbours, [normal, through breakable furniture]. Pathfinding asks for
+## these thousands of times a turn, so they are worked out once and cleared when the map changes.
+var _nav := [{}, {}]
+
 func rebuild_objs() -> void:
+	map_ver += 1
+	_nav = [{}, {}]
 	obj = {}
 	for si in slots.size():
 		var s: Dictionary = slots[si]
@@ -496,15 +556,6 @@ func rebuild_objs() -> void:
 		for i in objs.size():
 			var e: Array = objs[i]
 			obj[o + Vector2i(e[0], e[1])] = {"kind": "rubble" if e[4] else e[2], "block": e[3] and not e[4], "si": si, "i": i, "broken": e[4]}
-	# stairs: the center of each Stairs Up room links to the center of the same slot one floor up
-	links = {}
-	for si in slots.size():
-		if slots[si].get("type", "") == "stairs" and si + FLOOR_SLOTS < slots.size():
-			var top := slot_xy(si) * RS + Vector2i(2, 2)
-			var bottom := top + Vector2i(0, BH)
-			links[top] = bottom
-			links[bottom] = top
-			obj[bottom] = {"kind": "stairs_down", "block": false}
 	for k in traps.keys():
 		if not is_open(k):
 			gold += trap_cost(traps[k]) / 2
@@ -513,8 +564,8 @@ func rebuild_objs() -> void:
 
 # ---------------------------------------------------------------- day actions
 
-## Whether the tutorial lets this action happen right now. Actions look like "dig:6",
-## "build:7:barracks", "upgrade:12", "recruit:goblin", "trap", "entrance", "lair", "demolish", "night".
+## Whether the tutorial lets this action happen right now. Actions look like "build:6:barracks",
+## "build:7:barracks", "upgrade:12", "trap", "entrance", "lair", "demolish", "night".
 func allowed(act: String) -> bool:
 	return not gate.is_valid() or gate.call(act)
 
@@ -533,7 +584,8 @@ func add_log(msg: String, kind := "") -> void:
 		logs.resize(8)
 	logged.emit()
 
-func diggable(si: int) -> bool:
+## Rock beside one of your chambers: a room can be built straight into it.
+func can_open(si: int) -> bool:
 	if slots[si].state != "rock":
 		return false
 	for n in slot_neighbors(si):
@@ -541,12 +593,9 @@ func diggable(si: int) -> bool:
 			return true
 	return false
 
-func dig_cost() -> int:
-	var n := 0
-	for s in slots:
-		if s.state != "rock":
-			n += 1
-	return 10 + 5 * n
+## Whether a room can go in this chamber: an empty one, or rock next to your dungeon.
+func open_spot(si: int) -> bool:
+	return slots[si].state == "dug" or can_open(si)
 
 func spend(g: int, h := 1) -> bool:
 	if hours < h:
@@ -561,15 +610,9 @@ func spend(g: int, h := 1) -> bool:
 
 func _layout_changed() -> void:
 	rebuild_objs()
+	fill_rooms()
 	fix_posts()
 	changed.emit()
-
-func dig(si: int) -> void:
-	if not diggable(si) or not guard("dig:%d" % si) or not spend(dig_cost()):
-		return
-	slots[si] = {"state": "dug"}
-	add_log("Your servants dig out a new chamber.")
-	_layout_changed()
 
 ## Starter rooms are always open; the rest must be unlocked with souls between runs.
 func is_unlocked(t: String) -> bool:
@@ -593,26 +636,15 @@ func locked_rooms_for(key: String) -> Array:
 			o.append(t)
 	return o
 
-## Each room type can be built once per floor.
+## Each room type can be built once.
 func can_build(t: String, si: int) -> bool:
 	var R: Dictionary = Data.ROOMS[t]
 	if R.get("fixed", false) or (R.has("owner") and R.owner != mk) or not is_unlocked(t):
 		return false
-	if floor_type_count(t, floor_of_slot(si)) > 0:
-		return false
-	return t != "stairs" or stairs_block(si) == ""
-
-## Why a Stairs room cannot go in this chamber, or "" if it can.
-func stairs_block(si: int) -> String:
-	var f := floor_of_slot(si)
-	if f < floors - 1:
-		return "This floor already has stairs up."
-	if floors >= 1 + bosses:
-		return "Your lair can't carry another floor yet. Survive a boss night (night %d) to build higher." % ((bosses + 1) * boss_every())
-	return ""
+	return type_count(t) == 0
 
 func build(si: int, t: String) -> void:
-	if slots[si].state != "dug" or not can_build(t, si) or not guard("build:%d:%s" % [si, t]) or not spend(Data.ROOMS[t].cost[0]):
+	if not open_spot(si) or not can_build(t, si) or not guard("build:%d:%s" % [si, t]) or not spend(Data.ROOMS[t].cost[0]):
 		return
 	slots[si] = {"state": "built", "type": t, "lvl": 1}
 	if t == "coffin":
@@ -621,20 +653,19 @@ func build(si: int, t: String) -> void:
 	if t == "trainingyard":
 		smax += 4
 		shp += 4
-	if t == "stairs":
-		_add_floor()
-		slots[si + FLOOR_SLOTS] = {"state": "dug"}
-		add_log("Your servants raise floor %d above the lair." % floors, "info")
-	else:
-		add_log("You build a %s." % Data.ROOMS[t].name)
+	add_log("You build a %s." % Data.ROOMS[t].name)
 	_layout_changed()
 
 func upgrade(si: int) -> void:
 	var s: Dictionary = slots[si]
 	var R: Dictionary = Data.ROOMS[s.type]
+	if s.lvl >= MAX_LVL:
+		tip("The %s is already at its highest level." % R.name, true)
+		return
 	if not guard("upgrade:%d" % si) or not spend(Data.room_cost(s.type, s.lvl)):
 		return
 	s.lvl += 1
+	var moved_in := fill_rooms()
 	if s.type == "scrying":
 		_fill_future()
 	var hp := 6 if s.type == "lair" else (8 if s.type == "coffin" else 0)
@@ -645,22 +676,18 @@ func upgrade(si: int) -> void:
 	if duo() and sq > 0:
 		smax += sq
 		shp += sq
-	add_log("Your %s grows to level %d." % [R.name, s.lvl])
+	add_log("Your %s grows to level %d.%s" % [R.name, s.lvl,
+		(" %d more %s move in." % [moved_in, Data.UNITS[R.recruit].name.to_lower()]) if moved_in > 0 else ""])
 	changed.emit()
 
 func demolish(si: int) -> void:
 	var s: Dictionary = slots[si]
 	if Data.ROOMS[s.type].get("fixed", false) or not guard("demolish"):
 		return
-	if s.type == "stairs":
-		tip("The floor above stands on these stairs. They cannot come down.", true)
-		return
-	for m in minions:
-		if m.home == si and not m.free:
-			tip("Lose the minions housed here first.", true)
-			return
 	if not spend(0):
 		return
+	# the room's own minions leave with it
+	minions = minions.filter(func(m): return m.home != si or m.free)
 	add_log("You tear down the %s." % Data.ROOMS[s.type].name)
 	if s.type == "coffin":
 		mmax -= 8 * s.lvl
@@ -671,19 +698,102 @@ func demolish(si: int) -> void:
 	slots[si] = {"state": "dug"}
 	_layout_changed()
 
-## Moving the lair costs 1 hour on the same floor and a whole day to another floor.
-func lair_move_hours(si: int) -> int:
-	return 1 if floor_of_slot(si) == floor_of_slot(slot_idx("lair")) else 3
-
 func move_lair(si: int) -> void:
-	if slots[si].state != "dug" or not guard("lair") or not spend(0, lair_move_hours(si)):
+	# moving the throne is always free: no hours, no gold
+	if slots[si].state != "dug" or not guard("lair"):
 		return
 	var old := slot_idx("lair")
 	var o: Dictionary = slots[old]
 	slots[old] = {"state": "dug"}
 	slots[si] = o
 	sel = si
-	add_log("You drag your throne to a new lair.")
+	add_log("You drag your throne to a new chamber.")
+	_layout_changed()
+
+## Chambers an expansion on this side adds: one for every chamber along that side, so a 3x3
+## grows to 3x4 for 3 chambers, and a 3x4 grows to 4x4 for 4 more on its long side.
+func expand_size(side: String) -> int:
+	return SW if SIDES[side].y != 0 else SH
+
+func expand_cost(side: String) -> int:
+	return EXPAND_GOLD * expand_size(side)
+
+## Why the dungeon can't grow this way, or "" if it can.
+func expand_block(side: String) -> String:
+	var across: int = SH if SIDES[side].y != 0 else SW
+	if across >= MAX_SIDE:
+		return "Your dungeon can't grow past %d chambers that way." % MAX_SIDE
+	if expands_left() <= 0:
+		return "Beat a boss to earn an expansion. The next boss comes on night %d." % next_boss_night()
+	return ""
+
+## Expansions done so far: every row or column added to the starting 3x3.
+func expands_used() -> int:
+	return SW + SH - 2 * START_SIDE
+
+## Expansions earned by beating bosses and not spent yet.
+func expands_left() -> int:
+	return maxi(0, bosses - expands_used())
+
+## The first boss night from today on.
+func next_boss_night() -> int:
+	return ceili(day / float(boss_every())) * boss_every()
+
+## Whether the surface entrance sits on this outer edge of the dungeon.
+func entrance_on(side: String) -> bool:
+	match side:
+		"n": return entrance.y == 0
+		"s": return entrance.y == BH - 1
+		"w": return entrance.x == 0
+	return entrance.x == BW - 1
+
+## Adds a strip of solid rock along one side of the dungeon. Rooms can
+## then be built into it as usual. Growing past the entrance tunnels it out to the new edge.
+func expand(side: String) -> void:
+	var why := expand_block(side)
+	if why != "":
+		tip(why, true)
+		return
+	if not guard("expand") or not spend(expand_cost(side)):
+		return
+	var d: Vector2i = SIDES[side]
+	var ent_out := entrance_on(side)
+	var ow := SW
+	var nw := SW + absi(d.x)
+	var nh := SH + absi(d.y)
+	var off := Vector2i(1 if side == "w" else 0, 1 if side == "n" else 0)   # chambers the old grid shifts by
+	var ns := []
+	for i in nw * nh:
+		ns.append({"state": "rock"})
+	var remap := {}
+	for si in slots.size():
+		var c := Vector2i(si % ow, si / ow) + off
+		var n := c.y * nw + c.x
+		ns[n] = slots[si]
+		remap[si] = n
+	var move := func(p: Vector2i) -> Vector2i:
+		return p + off * RS
+	slots = ns
+	_set_dims(nw, nh)
+	var nt := {}
+	for k in traps:
+		nt[move.call(k)] = traps[k]
+	traps = nt
+	for m in minions:
+		m.post = move.call(m.post)
+		if m.home >= 0:
+			m.home = remap.get(m.home, m.home)
+	if sel >= 0:
+		sel = remap.get(sel, sel)
+	entrance = move.call(entrance)
+	if ent_out:
+		# the gate moves out to the new edge, with a tunnel chamber behind it
+		entrance += d * RS
+		var es := slot_of(entrance)
+		if slots[es].state == "rock":
+			slots[es] = {"state": "dug"}
+	add_log("Your servants push the dungeon %s: %d new chambers of rock to build into." % [
+		{"n": "north", "s": "south", "w": "west", "e": "east"}[side], expand_size(side)], "info")
 	_layout_changed()
 
 func move_entrance(p: Vector2i) -> void:
@@ -726,12 +836,13 @@ func trap_cap() -> int:
 		c += 6 + lvl("snareden") * 3 + lvl("runes") * 2
 	return c
 
+## Traps fire once a night, so each hit is a big one.
 func trap_dmg(t: String) -> int:
-	var cw: int = lvl("clockwork") * 2 + b.trap
+	var cw: int = lvl("clockwork") * 4 + b.trap
 	match t:
-		"spikes": return 3 + lvl("workshop") + cw
-		"snare": return 2 + cw
-	return 6 + maxi(1, lvl("runes")) * 3 + cw
+		"spikes": return 8 + 4 * maxi(1, lvl("workshop")) + cw
+		"snare": return 6 + cw
+	return Data.rune_dmg(lvl("runes")) + cw
 
 func place_trap(p: Vector2i) -> void:
 	if not guard("trap"):
@@ -767,7 +878,7 @@ func recruit_room(kind: String) -> String:
 			return t
 	return ""
 
-## Every recruit room houses its own minions, so copies on different floors add up.
+## Minions a recruit room can house.
 func cap_of(kind: String) -> int:
 	var t := recruit_room(kind)
 	if t == "":
@@ -837,28 +948,23 @@ func add_minion(kind: String, free := false) -> bool:
 	minions.append({"mid": next_id(), "kind": kind, "home": home, "post": post, "free": free})
 	return true
 
-func recruit(kind: String) -> void:
-	if not guard("recruit:" + kind):
-		return
-	if count_of(kind) >= cap_of(kind):
-		tip("That room is full. Upgrade it to house more.", true)
-		return
-	var c: int = Data.UNITS[kind].cost
-	if gold < c:
-		tip("A %s costs %d gold." % [Data.UNITS[kind].name.to_lower(), c], true)
-		return
-	if add_minion(kind):
-		gold -= c
-		add_log("A %s answers your call." % Data.UNITS[kind].name.to_lower())
-		# hand the new recruit straight to the player to post (the tutorial keeps its scripted flow)
-		if not gate.is_valid():
-			sel_minion = minions.back()
-			trap_mode = ""
-			ent_mode = false
-			decor_room = -1
-			decor_pick = null
-			tip("Click an open tile to post your new %s, or press Esc to leave it where it stands." % Data.UNITS[kind].name.to_lower())
-	changed.emit()
+## Every recruit room comes with its minions, free: as many as it houses at its level. Any that
+## died are replaced the same way at dawn. Returns how many moved in.
+func fill_rooms() -> int:
+	var added := 0
+	for si in slots.size():
+		var t: String = slots[si].get("type", "")
+		if t == "" or not Data.ROOMS[t].has("recruit"):
+			continue
+		var want: int = Data.ROOMS[t].cap * slots[si].lvl
+		var have := 0
+		for m in minions:
+			if m.home == si and not m.free:
+				have += 1
+		while have < want and add_minion(Data.ROOMS[t].recruit):
+			have += 1
+			added += 1
+	return added
 
 func fix_posts() -> void:
 	for m in minions:
@@ -884,7 +990,7 @@ func day_click(p: Vector2i) -> void:
 	if trap_mode != "":
 		place_trap(p)
 		return
-	if decor_room >= 0:
+	if arrange == "furniture":
 		decor_click(p)
 		return
 	if sel_minion != null:
@@ -902,6 +1008,9 @@ func day_click(p: Vector2i) -> void:
 		sel_minion = m2
 		changed.emit()
 		return
+	if arrange == "minions":
+		tip("Click one of your minions to pick it up.", true)
+		return
 	sel = slot_of(p)
 	changed.emit()
 
@@ -912,39 +1021,44 @@ func day_click(p: Vector2i) -> void:
 func breakable(p: Vector2i) -> bool:
 	return obj.has(p) and obj[p].block and obj[p].has("si") and not obj[p].kind in Data.FIXED_DECOR
 
-## A piece in the room being rearranged that can be picked up.
-func decor_movable(p: Vector2i) -> bool:
-	return decor_room >= 0 and obj.has(p) and obj[p].get("si", -1) == decor_room and not obj[p].broken \
-		and not obj[p].kind in Data.FIXED_DECOR
-
-## An empty tile in the room being rearranged where a piece can be set down.
-func decor_spot_ok(p: Vector2i) -> bool:
-	return decor_room >= 0 and in_b(p) and slot_of(p) == decor_room and not obj.has(p) and not traps.has(p) \
-		and p != entrance and p != monster_start() and not (duo() and p == squire_start()) \
-		and minion_at(p) == null and not links.has(p)
-
-func toggle_decor(si: int) -> void:
-	if decor_room == si:
-		decor_room = -1
-		decor_pick = null
-		changed.emit()
-		return
-	if not guard("decor"):
-		return
-	decor_room = si
-	decor_pick = null
-	sel_minion = null
+## Leaves every map-click mode: traps, the entrance, arranging, a minion in hand.
+func clear_modes() -> void:
 	trap_mode = ""
 	ent_mode = false
-	tip("Click a piece of furniture to pick it up, then an empty tile in the room to set it down.")
+	arrange = ""
+	decor_pick = null
+	sel_minion = null
+
+## A piece of furniture, in any built room, that can be picked up.
+func decor_movable(p: Vector2i) -> bool:
+	return arrange == "furniture" and obj.has(p) and obj[p].has("si") and not obj[p].broken \
+		and not obj[p].kind in Data.FIXED_DECOR
+
+## An empty tile in any built room where a piece can be set down.
+func decor_spot_ok(p: Vector2i) -> bool:
+	return arrange == "furniture" and in_b(p) and slots[slot_of(p)].state == "built" and not obj.has(p) \
+		and not traps.has(p) and p != entrance and p != monster_start() and not (duo() and p == squire_start()) \
+		and minion_at(p) == null
+
+## Turns "minions" or "furniture" arranging on, or off if it was already on.
+func toggle_arrange(mode: String) -> void:
+	var was := arrange
+	clear_modes()
+	if was == mode:
+		changed.emit()
+		return
+	if mode == "furniture" and not guard("decor"):
+		changed.emit()
+		return
+	arrange = mode
+	if mode == "furniture":
+		tip("Click any piece of furniture to pick it up, then an empty tile in any room to set it down.")
+	else:
+		tip("Click a minion, then an open tile for its new guard post.")
 	changed.emit()
 
 func decor_click(p: Vector2i) -> void:
-	if not in_b(p) or slot_of(p) != decor_room:
-		decor_room = -1
-		decor_pick = null
-		sel = slot_of(p) if in_b(p) else sel
-		changed.emit()
+	if not in_b(p):
 		return
 	if decor_movable(p):
 		decor_pick = null if decor_pick == p else p
@@ -955,15 +1069,20 @@ func decor_click(p: Vector2i) -> void:
 			move_decor(decor_pick, p)
 			decor_pick = null
 		else:
-			tip("Furniture goes on empty floor in this room: not on traps, guard posts, the throne or the entrance.", true)
+			tip("Furniture goes on empty floor in a built room: not on traps, guard posts, the throne or the entrance.", true)
 	else:
 		tip("Click a piece of furniture to pick it up.", true)
 	changed.emit()
 
+## Moves a piece to tile `to`, carrying it into another room if need be.
 func move_decor(from: Vector2i, to: Vector2i) -> void:
 	var o: Dictionary = obj[from]
 	var e: Array = room_objs(o.si)[o.i]
-	var base := slot_xy(o.si) * RS
+	var dest := slot_of(to)
+	if dest != o.si:
+		room_objs(o.si).remove_at(o.i)
+		room_objs(dest).append(e)
+	var base := slot_xy(dest) * RS
 	e[0] = to.x - base.x
 	e[1] = to.y - base.y
 	_layout_changed()
@@ -1028,7 +1147,7 @@ func apply_boon(id: String) -> void:
 			b.cd += 1
 			b.spell += 2
 		"greed": b.greed += 1.0
-		"jagged": b.trap += 8
+		"jagged": b.trap += 10
 		"owl":
 			b.hours += 1
 			gold += 50
@@ -1048,7 +1167,7 @@ func boon_choices() -> Array:
 func dawn(boon: Dictionary) -> void:
 	if is_boss_night(day):
 		bosses += 1
-		add_log("The earth trembles after the boss falls. You can dig a staircase to a new floor.", "info")
+		add_log("The boss is dead. The earth trembles: you can expand your dungeon by one row or column.", "info")
 	day += 1
 	if not boon.is_empty():
 		apply_boon(boon.id)
@@ -1064,7 +1183,9 @@ func dawn(boon: Dictionary) -> void:
 	hours = day_hours()
 	party = future.pop_front() if future.size() > 0 else make_party(day)
 	_fill_future()
-	_stitch()
+	var back := fill_rooms()
+	if back > 0:
+		add_log("%d new minion%s move into your rooms to replace the fallen." % [back, "s" if back > 1 else ""], "info")
 	add_log("Dawn of day %d. Terrified villagers leave %d gold at the cave mouth.%s%s" % [day, tribute,
 		(" Treasury: +%d gold." % tg) if tg > 0 else "", (" Larder: +%d HP." % heal) if heal > 0 else ""], "info")
 	changed.emit()
@@ -1074,26 +1195,18 @@ func _fill_future() -> void:
 	while future.size() < maxi(2, lvl("scrying")):
 		future.append(make_party(day + future.size() + 1))
 
-## Stitching Room: brings back minions lost last night for half their cost, if there is room.
-func _stitch() -> void:
-	var n := lvl("stitching")
-	var lost := fallen
-	fallen = []
-	for kind in lost:
-		if n <= 0:
-			break
-		var c: int = Data.UNITS[kind].cost / 2
-		if gold >= c and count_of(kind) < cap_of(kind) and add_minion(kind):
-			gold -= c
-			n -= 1
-			add_log("Your stitchers sew a %s back together for %d gold." % [Data.UNITS[kind].name.to_lower(), c], "info")
+## Souls a won run banks on top of the usual tally, before Dread.
+const WIN_SOULS := 100
 
-func end_run() -> int:
-	var earned := roundi((souls + day * 2) * soul_mult())
+func end_run(won := false) -> int:
+	var survived := day if won else day - 1
+	var earned := roundi((souls + day * 2 + (WIN_SOULS if won else 0)) * soul_mult())
 	meta.souls += earned
-	meta.best = maxi(meta.best, day - 1)
+	meta.best = maxi(meta.best, survived)
+	if won:
+		meta.wins = meta.get("wins", 0) + 1
 	if not mods.is_empty():
-		meta.best_dread = maxi(meta.get("best_dread", 0), day - 1)
+		meta.best_dread = maxi(meta.get("best_dread", 0), survived)
 	save_meta()
 	clear_run()
 	return earned

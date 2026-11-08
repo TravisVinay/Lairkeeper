@@ -1,10 +1,10 @@
 # Lairkeeper
 
-A roguelike where you play the monster. By day you dig a dungeon of 5x5 rooms, pick where the
-entrance and your lair go, lay permanent traps and recruit minions. By night the heroes your
-infamy attracts file in through the gate, and you fight them turn by turn on the map you built.
-Runs are endless: after every boss night (every 5th night) you can build a Stairs Up room and
-add a new floor on top, move your lair up, and make heroes climb through every floor to reach you.
+A roguelike where you play the monster. By day you build a dungeon of 5x5 rooms, starting
+three by three and expanding a row or column at a time, pick where the entrance and your throne
+room go (moving the throne is free), lay permanent traps and recruit minions. By night the heroes
+your infamy attracts file in through the gate, and you fight them turn by turn on the map you
+built. Every 5th night a boss leads the raid. Survive night 50 to win the run.
 Each run starts with a small set of rooms; spend souls between runs to unlock more blueprints.
 
 Built with **Godot 4.7** (GL Compatibility renderer, so it runs on older PCs and phones).
@@ -37,7 +37,7 @@ powershell -File tools\check.ps1 -Sim
 | File | What it owns |
 | --- | --- |
 | `scripts/data.gd` | All content: monsters, spells, units, heroes, rooms and their furniture, traps, boons. Balance changes usually start here. |
-| `scripts/game.gd` | The `Game` autoload: the current run, dungeon geometry (walls, doorways, line of sight, pathing) and every day action. Also saves meta progress to `user://meta.json` and the run in progress to `user://run.save` (by day only; quitting mid-night restarts that night). Floors are stacked in one coordinate space (floor *f* covers tile rows *f*×20 to *f*×20+19), and `links` holds the stairs between them, so pathing and line of sight work across floors without special cases. |
+| `scripts/game.gd` | The `Game` autoload: the current run, dungeon geometry (walls, doorways, line of sight, pathing) and every day action. Also saves meta progress to `user://meta.json` and the run in progress to `user://run.save` (by day only; quitting mid-night restarts that night). The grid starts 3x3 chambers and `expand()` grows it a row or column at a time, shifting every saved position. |
 | `scripts/battle.gd` | One night's fight: units, turns, spells, traps, room powers and hero AI. |
 | `scripts/board.gd` | The map view: camera (fit by day, zoomed and draggable at night), drawing, and pointer input. |
 | `scripts/sprites.gd` | Placeholder art drawn with shapes. Replace any function with real textures without touching game logic. |
