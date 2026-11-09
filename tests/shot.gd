@@ -15,6 +15,12 @@ func _ready() -> void:
 	main.menus.open_catalog(main.menus.show_title)
 	await _frames(10)
 	_save("res://build/shot_catalog.png")
+	var mons = Game.meta.get("mons", {}).duplicate(true)
+	Game.meta.mons = {"lich": {"lvl": 6, "picks": {"2": 1, "4": 0, "6": 1}, "load": ["nova", "chain", "siphon"]}}
+	main.menus.open_monsters(main.menus.show_title, "lich")
+	await _frames(10)
+	_save("res://build/shot_monsters.png")
+	Game.meta.mons = mons
 	main.menus.open_settings(main.menus.show_title)
 	await _frames(10)
 	_save("res://build/shot_settings.png")
@@ -26,30 +32,74 @@ func _ready() -> void:
 	main._choose("vampire")
 	Game.gold = 400
 	Game.hours = 6
-	Game.build(7, "crypt")
-	Game.recruit("spawn")
-	Game.dig(6)
-	Game.build(6, "barracks")
-	Game.recruit("goblin")
-	Game.dig(8)
-	Game.build(8, "library" if Game.mk == "lich" else "torture")
-	Game.sel = 7
+	Game.build(4, "crypt")
+	Game.build(3, "barracks")
+	Game.build(5, "library" if Game.mk == "lich" else "torture")
+	Game.sel = 4
 	await _frames(30)
 	_save("res://build/shot_day.png")
+	Game.sel = 1                          # the empty gate hall: the build list, by category
+	main.refresh()
+	await _frames(10)
+	_save("res://build/shot_build.png")
+	main.build_cat = "traps"
+	main.refresh()
+	await _frames(10)
+	_save("res://build/shot_build_traps.png")
+	main.build_cat = ""
+	Game.sel_minion = null
+	Game.toggle_arrange("furniture")
+	for k in Game.obj:
+		if Game.decor_movable(k) and Game.slot_of(k) == 4:
+			Game.day_click(k)
+			break
+	await _frames(10)
+	_save("res://build/shot_arrange.png")
+	Game.clear_modes()
 	main.menus.open_pause()
 	await _frames(10)
 	_save("res://build/shot_pause.png")
 	main.menus.pause_ov.visible = false
-	Game.bosses = 1
-	Game.hours = 6
-	Game.build(2, "stairs")
-	Game.dig(2 + Game.FLOOR_SLOTS + 5)
-	Game.sel = 2 + Game.FLOOR_SLOTS
-	main._show_floor(1)
+	# the patron's gift after night 1, then the trader's stall
+	main._show_pick({"kills": 3, "loot": 12, "stolen": 0, "lost": 0})
+	await _frames(10)
+	_save("res://build/shot_gift.png")
+	main.pick_ov.visible = false
+	for it in ["fang", "boots", "axe", "chain", "shortbow", "runeblade", "spiked", "heart", "fireball", "warding"]:
+		Game.add_item(it)
+	Game.equip(Game.minions[0], Game.stash.find("shortbow"))
+	main.set_tab("armory")
+	Game.trader = {}
+	Game._roll_trader()
+	Game.trader.stock[1].sold = true
+	main.open_trader()
+	await _frames(10)
+	_save("res://build/shot_trader.png")
+	main.close_trader()
+	await _frames(10)
+	_save("res://build/shot_day_trader.png")
+	Game.trader = {}
 	main.refresh()
-	await _frames(30)
-	_save("res://build/shot_floor2.png")
-	main._show_floor(0)
+	await _frames(5)
+	main.set_tab("armory")
+	await _frames(10)
+	_save("res://build/shot_armory.png")
+	main.set_tab("minions")
+	await _frames(10)
+	_save("res://build/shot_minions.png")
+	main._pick_minion(Game.minions[0])
+	await _frames(10)
+	_save("res://build/shot_arm_minion.png")
+	main.set_tab("rooms")
+	await _frames(40)
+	_save("res://build/shot_rooms_tab.png")
+	main.mon_btn.pressed.emit()
+	await _frames(20)
+	_save("res://build/shot_monster_tab.png")
+	main.menu_btn.pressed.emit()
+	await _frames(20)
+	_save("res://build/shot_menu_tab.png")
+	main.set_tab("rooms")
 	await main.start_night()
 	await _frames(60)
 	_save("res://build/shot_night.png")
@@ -73,8 +123,7 @@ func _duo_shots(main) -> void:
 	main._choose("darklord", false)
 	Game.gold = 400
 	Game.hours = 6
-	Game.build(7, "sanctum")
-	Game.recruit("goblin")
+	Game.build(4, "sanctum")
 	Game.down = ["squire"]
 	Game.souls = 9
 	main.refresh()

@@ -8,5 +8,5 @@ $p = Split-Path -Parent $PSScriptRoot
 $out = & $g --headless --path $p --import 2>&1
 if ($Sim) { $out += & $g --headless --path $p res://tests/sim.tscn 2>&1 }
 $out | ForEach-Object { "$_" } |
-  Where-Object { $_ -match "ERROR|Parse|at: |SIM|UI smoke|FLOORS|UNLOCKS|SAVE|MODS|ROOMS|DUO|TUTORIAL|SHAMAN|WARLOCK|DECOR|SAPPER|PARTY|lost|ok\(|STALE|BAD|WARNING" -and $_ -notmatch "first_scan|update_scripts" } |
+  Where-Object { $_ -match "ERROR|Parse|at: |SIM|UI smoke|GROW|LEVELS|SPELLS|ROGUE|ARMS|SAVE|MODS|ROOMS|DUO|TUTORIAL|SHAMAN|WARLOCK|DECOR|SAPPER|PARTY|EXPAND|AI MOVES|TRAPS|UNDO|ARRANGE TRAPS|ALL ROOMS|ROOM USE|lost|ok\(|STALE|BAD|WARNING" -and $_ -notmatch "first_scan|update_scripts" } |
   Select-Object -First 80
