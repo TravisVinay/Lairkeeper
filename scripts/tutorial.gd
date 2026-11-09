@@ -97,6 +97,13 @@ func _enter() -> void:
 	if s.has("sel"):
 		Game.sel = s.sel
 	ui.board.hint_slot = s.get("slot", -1)
+	# show the tab the step is about
+	if "trap" in s.get("allow", []):
+		ui.tab = "traps"
+	elif s.title.begins_with("Post your goblin"):
+		ui.tab = "minions"
+	elif s.has("slot") or s.has("sel"):
+		ui.tab = "rooms"
 	_render()
 	ui.side.scroll_vertical = 0
 	Game.changed.emit()
@@ -178,9 +185,9 @@ func _nightfall(text: String) -> Dictionary:
 	return {"title": "Let night fall", "text": text, "allow": ["night"],
 		"done": func(): return ui.night}
 
-func _boon(day: int) -> Dictionary:
-	return {"title": "Choose a dark boon", "night": true, "boon": true,
-		"text": "Every fifth night you survive earns a dark boon: a big, permanent power-up for the rest of the run. Pick one.",
+func _gift(day: int) -> Dictionary:
+	return {"title": "Your patron's gift", "night": true, "boon": true,
+		"text": "Night survived. A dark patron is watching you. After your first night, and every seventh night after, it offers you a choice of three gifts: permanent power-ups for the rest of the run. Pick one.",
 		"done": _dawned(day)}
 
 func _greet(day: int, text := "Night survived. Press Greet the dawn to start the next day.") -> Dictionary:
@@ -209,8 +216,8 @@ func _make_steps() -> Array:
 			"text": "Your goblins fight beside you every night, and if one dies the barracks replaces it at dawn. Click a goblin on the map, then click a tile in the top chamber. That's where it stands guard when the heroes arrive.",
 			"done": func(): return Game.minions.any(func(m): return Game.slot_of(m.post) == 1),
 			"act": func(): Game.minions[0].post = Vector2i(7, 3)},
-		{"title": "Build a Trap Workshop", "slot": 3, "allow": ["build:3:workshop"], "need": 25,
-			"text": "Click the rock to the left of the barracks. No digging needed: rooms go straight into the rock next to your dungeon. Build a Trap Workshop there. It lets you lay traps. Traps stay put for the whole run and re-arm every night.",
+		{"title": "Build a Spike Workshop", "slot": 3, "allow": ["build:3:workshop"], "need": 25,
+			"text": "Click the rock to the left of the barracks. No digging needed: rooms go straight into the rock next to your dungeon. Build a Spike Workshop there. It lets you lay up to 3 spike traps, and upgrading it lets you lay more. Traps stay put for the whole run and re-arm every night.",
 			"done": _built(3, "workshop"), "act": func(): Game.build(3, "workshop")},
 		{"title": "Lay spike traps", "slot": 1, "allow": ["trap"], "need": 20,
 			"text": "In the Traps panel, pick Spike trap, then click two open tiles in the top chamber where the heroes come in. A spike trap fires once a night, badly hurting the first hero that steps on it. Traps cost gold but no time.",
@@ -231,13 +238,13 @@ func _make_steps() -> Array:
 		{"title": "Attack", "night": true,
 			"text": "A hero ringed in red is in reach of your selected unit: click it to attack. Your claws drink a third of the damage they deal back as health. Kill every hero to win the night.",
 			"done": _won_night},
-		_greet(2, "Night survived. Every fifth night you survive also earns a dark boon, a big permanent power-up. For now, press Greet the dawn."),
+		_gift(2),
 
 		# ---- day 2: traps and upgrades
 		{"title": "Dawn", "party": 1, "next": "Next",
-			"text": "Every dawn brings 3 fresh hours, and the frightened villagers leave 10 gold at the cave mouth. Heroes you kill drop gold too. Tonight an archer joins the peasants."},
+			"text": "Every dawn brings 3 fresh hours, and the frightened villagers leave 8 gold at the cave mouth. Heroes you kill drop gold too. Tonight an archer joins the peasants."},
 		{"title": "Upgrade your throne room", "slot": 7, "allow": ["upgrade:7"], "need": 40,
-			"text": "Click your throne room and upgrade it. Upgrades make a room stronger: a level 2 throne room gives you 6 more max HP.",
+			"text": "Click your throne room and upgrade it. Upgrades make a room stronger: a level 2 throne room gives you 6 more max HP. They take longer than building, too: as many hours as the level you raise it to, so 2 hours for level 2.",
 			"done": func(): return Game.lvl("lair") >= 2, "act": func(): Game.upgrade(7)},
 		{"title": "Build a Larder", "slot": 5, "allow": ["build:5:larder"], "need": 20,
 			"text": "Click the rock to the right of the barracks and build a Larder. It heals you every dawn, so you start each night stronger.",
@@ -270,9 +277,9 @@ func _make_steps() -> Array:
 		_greet(4),
 
 		# ---- day 4: snares, then a free choice
-		{"title": "Snares", "slot": 3, "party": 3, "allow": ["upgrade:3"], "need": 40,
-			"text": "Upgrade the Trap Workshop. Level 2 unlocks snares and room for more traps.",
-			"done": func(): return Game.lvl("workshop") >= 2, "act": func(): Game.upgrade(3)},
+		{"title": "Snares", "slot": 8, "party": 3, "allow": ["build:8:snareden"], "need": 25,
+			"text": "Each kind of trap comes from its own room. Click the rock right of your throne room and build a Snare Den. It lets you lay 2 snares.",
+			"done": _built(8, "snareden"), "act": func(): Game.build(8, "snareden")},
 		{"title": "Set a snare", "slot": 4, "allow": ["trap"], "need": 8,
 			"text": "Pick Snare in the Traps panel and place one in the chamber above your throne room. A snare holds a hero in place for a turn, so your minions can gang up on it.",
 			"done": func(): return Game.traps.values().has("snare"),
@@ -298,8 +305,8 @@ func _make_steps() -> Array:
 		{"title": "Fight the Paladin", "night": true,
 			"text": "Mesmerize works on bosses too. Let traps and minions wear the Paladin down, and don't trade blows when you're low.",
 			"done": _won_night},
-		_boon(6),
+		_greet(6),
 
 		{"title": "Tutorial complete", "next": "Finish",
-			"text": "You know the basics. This run is yours now, so keep going as long as you can. When you run out of chambers, expand the dungeon from the Layout panel. Between runs, spend souls in the Room catalog to unlock new rooms."},
+			"text": "You know the basics. This run is yours now, so keep going as long as you can. When you run out of chambers, expand the dungeon from the Layout panel. Every third day a wandering trader stops at your gate to sell relics and supplies for gold, and your patron sends another gift every seventh night. Between runs, spend souls on the Monsters screen to level up a monster: new perks, new spells and more ways to play it."},
 	]

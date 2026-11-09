@@ -13,6 +13,7 @@ var round_lbl: Label
 var tip_lbl: Label
 var end_btn: Button
 var ai_btn: Button
+var undo_btn: Button
 var fit_btn: Button
 var powers: VBoxContainer
 var log_rt: RichTextLabel
@@ -60,9 +61,15 @@ func build(main_ui, board_node, dock: Container) -> void:
 	fit_btn = Button.new()
 	fit_btn.text = "Whole map"
 	fit_btn.theme_type_variation = "GhostButton"
-	fit_btn.tooltip_text = "Drag or WASD / arrow keys to pan.\nEsc deselects. 1 and 2 cast spells. F finishes the selected unit. Q lets the AI move your minions and ends the turn."
+	fit_btn.tooltip_text = "Drag or WASD / arrow keys to pan.\nEsc deselects. Number keys cast spells and scrolls. F finishes the selected unit. Q lets the AI move your minions and ends the turn. Z undoes your last action."
 	fit_btn.pressed.connect(ui._toggle_fit)
 	tr.add_child(fit_btn)
+	undo_btn = Button.new()
+	undo_btn.text = "Undo  (Z)"
+	undo_btn.theme_type_variation = "GhostButton"
+	undo_btn.tooltip_text = "Take back your last move, attack or spell this turn.\nYou can keep undoing back to the start of your turn."
+	undo_btn.pressed.connect(_undo)
+	tr.add_child(undo_btn)
 	ai_btn = Button.new()
 	ai_btn.text = "AI moves  (Q)"
 	ai_btn.theme_type_variation = "GhostButton"
@@ -114,6 +121,10 @@ func _end_turn() -> void:
 	if battle:
 		battle.enemy_turn()
 
+func _undo() -> void:
+	if battle:
+		battle.undo()
+
 func _ai_moves() -> void:
 	if battle:
 		battle.auto_minions()
@@ -146,6 +157,7 @@ func render() -> void:
 	round_lbl.text = "The heroes advance" if enemy else "Night %d · round %d" % [Game.day, battle.turn]
 	end_btn.disabled = battle.busy or battle.over
 	ai_btn.disabled = battle.busy or battle.over
+	undo_btn.disabled = not battle.can_undo()
 	fit_btn.text = "Zoom in" if board.zoomed_out() else "Whole map"
 	_render_powers()
 	if inspect != null and inspect.hp <= 0:
@@ -171,6 +183,8 @@ func _render_friend(u) -> void:
 	var col: String = Game.M.col if u.kind == "monster" else (Game.M.partner.col if u.kind == "squire" else "#ede3cd")
 	pop_box.add_child(ui.title(u.uname, col, 20))
 	pop_box.add_child(ui.lbl(_stats(u, battle.atk_of(u)), 13))
+	if not u.wpn.is_empty():
+		pop_box.add_child(ui.lbl("%s: %s" % [u.wpn.name, u.wpn.desc], 12, "#c8a070"))
 	if u.shield > 0 or u.rally:
 		pop_box.add_child(ui.lbl(("Warded: soaks %d damage. " % u.shield if u.shield > 0 else "") + ("Rallied: +1 move, +2 damage." if u.rally else ""), 12, "#a8b4ff"))
 	if battle.squire != null and battle.is_mon(u):

@@ -11,6 +11,8 @@ var fullscreen := false
 var ui_scale := 1.0
 ## Multiplies how fast fight animations play. Battle.wait() divides by it.
 var battle_speed := 1.0
+## Dev switch: every monster counts as fully levelled without spending souls. Ignored by headless tests.
+var dev_unlock_all := false
 
 
 func _ready() -> void:
@@ -19,6 +21,7 @@ func _ready() -> void:
 		fullscreen = cf.get_value("display", "fullscreen", false)
 		ui_scale = cf.get_value("display", "ui_scale", 1.0)
 		battle_speed = cf.get_value("game", "battle_speed", 1.0)
+		dev_unlock_all = cf.get_value("dev", "unlock_all", false)
 	apply()
 
 
@@ -29,6 +32,7 @@ func save() -> void:
 	cf.set_value("display", "fullscreen", fullscreen)
 	cf.set_value("display", "ui_scale", ui_scale)
 	cf.set_value("game", "battle_speed", battle_speed)
+	cf.set_value("dev", "unlock_all", dev_unlock_all)
 	cf.save(PATH)
 
 

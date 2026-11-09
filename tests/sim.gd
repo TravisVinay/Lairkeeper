@@ -11,8 +11,10 @@ var _won := false
 
 func _ready() -> void:
 	Game.fast = true                       # no animation waits, and never write the real save
-	Game.meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
-	_unlock_test()
+	Game.meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": [], "mons": {}}
+	_level_test()
+	await _rogue_test()
+	await _arms_test()
 	_save_test()
 	_expand_test()
 	_mods_test()
@@ -23,14 +25,19 @@ func _ready() -> void:
 	_party_test()
 	await _decor_test()
 	await _ai_test()
-	Game.meta.rooms = Data.ROOMS.keys()   # the scripted runs may use every room
+	await _undo_test()
+	_arrange_traps_test()
+	await _spells_test()
 	await _ui_smoke()
 	for i in 5:
 		await _tutorial_test()
 	await _grow_test()
+	await _all_rooms_test()
+	Game.meta.room_stats = {}
 	for k in Data.MONSTERS:
 		for i in 2:
 			await _play(k)
+	_room_use_report()
 	_check_layouts()
 	print("SIM DONE")
 	get_tree().quit()
@@ -87,7 +94,7 @@ func _tutorial_test() -> void:
 			tut.advance()
 		elif st.get("night", false):
 			if main.pick_ov.visible:
-				await main._pick(Game.boon_choices()[0])
+				await main._pick(Game.gift_choices()[0] if Game.gift_due(Game.day) else {})
 			elif main.battle != null and not main.battle.over:
 				var b: Battle = main.battle
 				b.finished.connect(_on_finished)
@@ -215,15 +222,12 @@ func _duo_test() -> void:
 	print("DUO: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
 
 
-## Spirit Lodge (a soul unlock) and shamans, the level cap, recruit placement and boon timing.
+## Spirit Lodge and shamans, the level cap, recruit placement and boon timing.
 func _shaman_test() -> void:
 	var errors := []
 	Game.new_run("vampire")
 	Game.gold = 9999
 	Game.hours = 99
-	if Game.is_unlocked("lodge"): errors.append("Spirit Lodge open without souls")
-	Game.meta.souls = 30
-	if not Game.unlock_room("lodge") or Game.meta.souls != 0: errors.append("could not unlock the Spirit Lodge for 30 souls")
 	var g_build := Game.gold
 	Game.build(5, "lodge")
 	if Game.slots[5].get("type", "") != "lodge": errors.append("could not build the Spirit Lodge")
@@ -242,7 +246,7 @@ func _shaman_test() -> void:
 	var g_dawn := Game.gold
 	Game.dawn({})
 	if Game.count_of("shaman") != 3: errors.append("dawn left %d shamans" % Game.count_of("shaman"))
-	if Game.gold != g_dawn + 10: errors.append("replacing shamans cost %d" % (g_dawn + 10 - Game.gold))
+	if Game.gold != g_dawn + Game.TRIBUTE: errors.append("replacing shamans cost %d" % (g_dawn + Game.TRIBUTE - Game.gold))
 	for t in Data.ROOMS:
 		if Data.ROOMS[t].cost.size() != Game.MAX_LVL: errors.append("%s lists %d prices" % [t, Data.ROOMS[t].cost.size()])
 	# shamans heal your units within 2 tiles at the start of your turn
@@ -263,12 +267,14 @@ func _shaman_test() -> void:
 	Game.hours = 99
 	Game.demolish(5)
 	if Game.count_of("shaman") != 0: errors.append("%d shamans stayed after the lodge came down" % Game.count_of("shaman"))
-	# boons come every fifth night
-	if Game.boon_due(4) or not Game.boon_due(5) or Game.boon_due(6) or not Game.boon_due(10): errors.append("boon nights wrong")
-	Game.day = 5
-	if Game.next_boon_night() != 5: errors.append("day 5 says next boon on night %d" % Game.next_boon_night())
-	Game.day = 6
-	if Game.next_boon_night() != 10: errors.append("day 6 says next boon on night %d" % Game.next_boon_night())
+	# patron gifts come after night 1, then every seventh night
+	if not Game.gift_due(1) or Game.gift_due(2) or Game.gift_due(7) or not Game.gift_due(8) or not Game.gift_due(15): errors.append("gift nights wrong")
+	Game.day = 1
+	if Game.next_gift_night() != 1: errors.append("day 1 says next gift on night %d" % Game.next_gift_night())
+	Game.day = 2
+	if Game.next_gift_night() != 8: errors.append("day 2 says next gift on night %d" % Game.next_gift_night())
+	Game.day = 8
+	if Game.next_gift_night() != 8: errors.append("day 8 says next gift on night %d" % Game.next_gift_night())
 	Game.meta.rooms = []
 	print("SHAMAN: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
 
@@ -438,7 +444,6 @@ func _warlock_test() -> void:
 	Game.new_run("vampire")
 	Game.gold = 9999
 	Game.hours = 99
-	if not Game.is_unlocked("coven"): errors.append("Warlock Coven needs souls")
 	Game.build(5, "coven")
 	if Game.count_of("warlock") != 1: errors.append("the coven came with %d warlocks" % Game.count_of("warlock"))
 	var b := Battle.new()
@@ -518,7 +523,7 @@ func _mods_test() -> void:
 	if Game.mmax != roundi(38 * 0.75): errors.append("Glass Lair: %d max HP" % Game.mmax)
 	if Game.party.size() != 4: errors.append("Crowded Gate: party of %d" % Game.party.size())
 	if Game.make_party(4)[0] != "paladin" or Game.make_party(5)[0] == "paladin": errors.append("Restless Crusade: boss not on night 4")
-	if Game.kill_gold(10) != 5: errors.append("Lean Coffers: kill gold %d" % Game.kill_gold(10))
+	if Game.kill_gold(10) != roundi(10 * Game.KILL_GOLD) / 2: errors.append("Lean Coffers: kill gold %d" % Game.kill_gold(10))
 	if absf(Game.soul_mult() - 2.85) > 0.001: errors.append("multiplier %.2f" % Game.soul_mult())
 	var b := Battle.new()
 	var h = b.mk_unit("h", "peasant", Vector2i(7, 1))
@@ -533,7 +538,7 @@ func _mods_test() -> void:
 	var g0 := Game.gold
 	Game.dawn({})
 	if Game.mhp != 10: errors.append("No Rest: healed to %d" % Game.mhp)
-	if Game.gold - g0 != 5: errors.append("Lean Coffers: tribute %d" % (Game.gold - g0))
+	if Game.gold - g0 != Game.TRIBUTE / 2: errors.append("Lean Coffers: tribute %d" % (Game.gold - g0))
 	if Game.hours != 2: errors.append("Short Days: %d hours after dawn" % Game.hours)
 	Game.souls = 10
 	Game.day = 2
@@ -680,18 +685,298 @@ func _ai_test() -> void:
 	print("AI MOVES: %s (night ended after %d turns)" % ["ok" if errors.is_empty() else "BAD " + "; ".join(errors), rounds])
 
 
-func _unlock_test() -> void:
-	Game.new_run("lich")
+## Undo takes back moves, attacks and kills one at a time within your turn, and the heroes'
+## turn clears it.
+func _undo_test() -> void:
 	var errors := []
-	if Game.can_build("armory", 4): errors.append("armory buildable while locked")
-	if not Game.can_build("treasury", 4): errors.append("treasury (starter) not buildable")
-	if not Game.can_build("library", 4): errors.append("lich starter room not buildable")
-	if Game.can_build("manawell", 4): errors.append("mana well buildable while locked")
-	if Game.unlock_room("armory"): errors.append("unlocked a room with no souls")
-	Game.meta.souls = 100
-	if not Game.unlock_room("armory") or not Game.can_build("armory", 4): errors.append("could not unlock and build the armory")
-	if Game.meta.souls != 100 - Data.ROOMS.armory.unlock: errors.append("unlock did not charge souls")
-	print("UNLOCKS: %s" % ("ok" if errors.is_empty() else "FAIL " + "; ".join(errors)))
+	Game.new_run("vampire")
+	var b := Battle.new()
+	add_child(b)
+	b.start()
+	if b.can_undo(): errors.append("could undo before doing anything")
+	var m := b.mon
+	var start_pos := m.pos
+	# a move
+	var dest = null
+	for k in b.reach:
+		if not b.reach[k].occ and b.reach[k].d > 0:
+			dest = k
+			break
+	await b.handle_click(dest)
+	if m.pos == start_pos: errors.append("the monster didn't move")
+	b.undo()
+	if m.pos != start_pos or m.moved: errors.append("undo left the monster at %s (moved %s)" % [m.pos, m.moved])
+	# an attack that kills: the hero, the gold and the kill all come back
+	var h = b.mk_unit("h", "peasant", m.pos + Vector2i(0, 1))   # the rug below the throne
+	h.hp = 1
+	var g0 := Game.souls
+	var n0 := b.units.size()
+	b.select(m)
+	await b.handle_click(h.pos)
+	if h.hp > 0: errors.append("the attack didn't kill")
+	b.undo()
+	if h.hp != 1 or b.kills != 0 or b.loot != 0 or Game.souls != g0 or m.acted: errors.append("undoing the kill: hp %d, kills %d, loot %d" % [h.hp, b.kills, b.loot])
+	if b.units.size() != n0: errors.append("undo changed the unit count")
+	# two actions undo in reverse order, then nothing is left
+	await b.handle_click(h.pos)
+	b.finish_unit(b.mon)
+	b.undo()
+	b.undo()
+	if b.can_undo() or h.hp != 1: errors.append("two undos didn't rewind both actions")
+	# the heroes' turn clears it
+	await b.handle_click(h.pos)
+	await b.enemy_turn()
+	if b.can_undo(): errors.append("could undo after the heroes moved")
+	b.queue_free()
+	print("UNDO: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
+
+
+## Arrange > Traps picks a trap up and sets it down elsewhere for free, and refuses bad tiles.
+func _arrange_traps_test() -> void:
+	var errors := []
+	Game.new_run("vampire")
+	Game.gold = 999
+	Game.hours = 3
+	Game.build(3, "workshop")
+	Game.trap_mode = "spikes"
+	Game.place_trap(Vector2i(7, 2))
+	Game.trap_mode = ""
+	var g0 := Game.gold
+	var h0 := Game.hours
+	Game.toggle_arrange("traps")
+	Game.day_click(Vector2i(7, 2))
+	if Game.trap_pick != Vector2i(7, 2): errors.append("couldn't pick the trap up")
+	Game.day_click(Game.entrance)               # refused
+	if not Game.traps.has(Vector2i(7, 2)): errors.append("set the trap on the entrance")
+	Game.day_click(Vector2i(7, 7))
+	if Game.traps.get(Vector2i(7, 7), "") != "spikes" or Game.traps.has(Vector2i(7, 2)): errors.append("trap didn't move: %s" % [Game.traps])
+	if Game.gold != g0 or Game.hours != h0: errors.append("moving a trap cost %d gold, %d hours" % [g0 - Game.gold, h0 - Game.hours])
+	if Game.arrange != "traps": errors.append("left traps mode after one move")
+	Game.toggle_arrange("traps")
+	if Game.arrange != "": errors.append("Done didn't end arranging")
+	print("ARRANGE TRAPS: ", "ok" if errors.is_empty() else "BAD " + "; ".join(errors))
+
+
+## Builds every room at level 3 (with its own monster for signature rooms) and fights a few
+## turns, so every room's effect code runs at least once.
+func _all_rooms_test() -> void:
+	var errors := []
+	var n := 0
+	# every room sits in a real category, and no two rooms do exactly the same thing
+	var cats := Data.CATS.map(func(c): return c.id)
+	var fx_seen := {}
+	for t in Data.ROOMS:
+		var R0: Dictionary = Data.ROOMS[t]
+		if t != "lair" and not R0.get("cat", "") in cats: errors.append("%s has no category" % t)
+		if R0.has("fx"):
+			var sig := "%s|%s|%s" % [R0.get("owner", ""), JSON.stringify(R0.fx), R0.get("garrison", "")]
+			if fx_seen.has(sig): errors.append("%s does the same as %s" % [t, fx_seen[sig]])
+			fx_seen[sig] = t
+	for t in Data.ROOMS:
+		if t == "lair":
+			continue
+		var R: Dictionary = Data.ROOMS[t]
+		Game.new_run(R.get("owner", "vampire"))
+		Game.gold = 9999
+		Game.hours = 99
+		Game.build(4, t)
+		if Game.slots[4].get("type", "") != t:
+			errors.append("couldn't build %s" % t)
+			continue
+		Game.upgrade(4)
+		Game.upgrade(4)
+		if Data.room_eff(t, 3) == "": errors.append("%s has no description" % t)
+		var b := Battle.new()
+		add_child(b)
+		b.finished.connect(_on_finished)
+		_done = false
+		b.start()
+		for i in 3:
+			if _done:
+				break
+			await b.auto_minions()
+		b.queue_free()
+		n += 1
+	# Charnel House: a hero killed inside rises as your skeleton
+	Game.new_run("necro")
+	Game.gold = 999
+	Game.build(4, "charnel")
+	var cb := Battle.new()
+	add_child(cb)
+	cb.mon = cb.mk_unit("p", "monster", Game.monster_start())
+	var vic = cb.mk_unit("h", "peasant", Vector2i(7, 7))
+	var before := cb.alive("p").size()
+	cb.hurt(vic, 999, cb.mon)
+	if cb.alive("p").size() != before + 1 or cb.unit_at(Vector2i(7, 7)) == null or cb.unit_at(Vector2i(7, 7)).kind != "skeleton":
+		errors.append("Charnel House didn't raise a skeleton")
+	cb.queue_free()
+	print("ALL ROOMS: %s (%d rooms built and fought in)" % ["ok" if errors.is_empty() else "BAD " + "; ".join(errors), n])
+
+
+## Which rooms the scripted runs built, and how long those rooms stood.
+func _room_use_report() -> void:
+	var rs: Dictionary = Game.meta.get("room_stats", {})
+	var never := []
+	for t in Data.ROOMS:
+		if t != "lair" and not rs.has(t):
+			never.append(t)
+	var used := rs.keys()
+	used.sort_custom(func(a, c): return rs[a][1] > rs[c][1])
+	print("ROOM USE: %d of %d rooms built in scripted runs. Longest standing: %s" % [rs.size(), Data.ROOMS.size() - 1,
+		", ".join(used.slice(0, 8).map(func(t): return "%s %d" % [t, rs[t][1]]))])
+	print("ROOM USE: never built: %s" % (", ".join(never) if never.size() > 0 else "none"))
+
+
+func _level_test() -> void:
+	var errors := []
+	# every room is open from the start; owners still apply
+	Game.new_run("lich")
+	if not Game.can_build("armory", 4): errors.append("armory not buildable")
+	if not Game.can_build("manawell", 4): errors.append("lich room not buildable")
+	if Game.can_build("crypt", 4): errors.append("lich can build the vampire's crypt")
+	# souls spent on room unlocks come back, once
+	var path := Game.meta_path
+	Game.meta_path = "user://sim_meta.json"
+	var f := FileAccess.open(Game.meta_path, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"souls": 5, "hoard": 0, "best": 0, "rooms": ["armory", "manawell", "stitching"]}))
+	f.close()
+	Game.load_meta()
+	var want: int = 5 + Game.ROOM_REFUNDS.armory + Game.ROOM_REFUNDS.manawell + Game.ROOM_REFUNDS.stitching
+	if Game.meta.souls != want or not Game.meta.rooms.is_empty(): errors.append("room refund gave %d souls, wanted %d" % [Game.meta.souls, want])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(Game.meta_path))
+	Game.meta_path = path
+	Game.meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": [], "mons": {}}
+
+	# levels cost souls
+	if Game.mon_lvl("lich") != 1 or Game.can_level("lich"): errors.append("lich should start at level 1 with nothing to spend")
+	Game.meta.souls = 10000
+	if not Game.level_up("lich") or Game.mon_lvl("lich") != 2 or Game.meta.souls != 10000 - Data.mon_level_cost(1): errors.append("level 2 didn't charge %d souls" % Data.mon_level_cost(1))
+	# perks: first option by default, swap freely
+	if Game.perks_of("lich") != ["glacial"]: errors.append("level 2 perks %s" % [Game.perks_of("lich")])
+	Game.set_perk("lich", 2, 1)
+	if Game.perks_of("lich") != ["forked"]: errors.append("perk swap failed")
+	if Game.perk_pick("lich", 4) != -1: errors.append("level 4 perk open at level 2")
+	# spells: 2 slots, new spells join the pool, equipping swaps out the oldest
+	if Game.loadout("lich") != ["nova", "chain"]: errors.append("starting loadout %s" % [Game.loadout("lich")])
+	Game.level_up("lich")
+	if Game.known_spells("lich").size() != 3: errors.append("level 3 didn't teach a spell")
+	Game.equip_spell("lich", "", "siphon")
+	if Game.loadout("lich") != ["chain", "siphon"]: errors.append("equip gave %s" % [Game.loadout("lich")])
+	Game.level_up("lich")
+	Game.level_up("lich")
+	if Game.load_slots("lich") != 3 or Game.loadout("lich").size() != 3: errors.append("level 5 didn't open a third slot: %s" % [Game.loadout("lich")])
+	while Game.level_up("lich"):
+		pass
+	if Game.mon_lvl("lich") != Data.MON_MAX_LVL: errors.append("lich stopped at level %d" % Game.mon_lvl("lich"))
+	if Game.perks_of("lich").size() != 4: errors.append("max level has %d perks" % Game.perks_of("lich").size())
+	# the run takes the kit: perks and spells, and keeps it through a save
+	Game.set_perk("lich", 4, 1)   # Arcane Focus, so the only HP perk is
+	Game.set_perk("lich", 8, 0)   # Undying: +15 max HP
+	Game.new_run("lich")
+	var ids: Array = Game.M.specials.map(func(sp): return sp.id)
+	if ids.size() != 3 or not "siphon" in ids: errors.append("run spells %s" % [ids])
+	if Game.mmax != Data.MONSTERS.lich.hp + 15: errors.append("Undying gave %d max HP" % Game.mmax)
+	if Game.perk("chain_jumps") != 2 or Game.fx("mon_regen") != 2: errors.append("perk effects not counted")
+	Game.run_path = "user://sim_run.save"
+	Game.fast = false
+	Game.save_run()
+	Game.set_perk("lich", 2, 0)   # a change between runs doesn't touch the saved run
+	Game.new_run("vampire")
+	Game.load_run()
+	if not Game.has_perk("forked") or Game.M.specials.size() != 3: errors.append("saved run lost its kit")
+	Game.clear_run()
+	Game.fast = true
+	Game.run_path = "user://run.save"
+	# the tutorial's base kit has no perks and the starting spells
+	Game.new_run("lich", [], true)
+	if Game.kit.perks.size() > 0 or Game.M.specials != Data.MONSTERS.lich.specials: errors.append("base kit carried perks or spells")
+	# the duo picks spells per unit
+	for i in 6:
+		Game.level_up("darklord")
+	Game.equip_spell("darklord", "squire", "cleave")
+	if not "cleave" in Game.loadout("darklord", "squire") or Game.loadout("darklord", "").size() != 3: errors.append("duo loadouts %s / %s" % [Game.loadout("darklord", ""), Game.loadout("darklord", "squire")])
+	Game.meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": [], "mons": {}}
+	print("LEVELS: %s" % ("ok" if errors.is_empty() else "FAIL " + "; ".join(errors)))
+
+
+## Every pool spell casts at a real target and does its job, with every perk of that monster on.
+func _spells_test() -> void:
+	var errors := []
+	Game.meta.souls = 100000
+	for k in Data.MONSTERS:
+		while Game.level_up(k):
+			pass
+	for k in Data.SPELL_POOL:
+		for sp0 in Data.SPELL_POOL[k]:
+			var who: String = sp0.get("who", "")
+			Game.equip_spell(k, who, sp0.id)
+			Game.new_run(k)
+			Game.gold = 100
+			var b := Battle.new()
+			add_child(b)
+			b.start()
+			var sp := b.spell(sp0.id)
+			if sp.is_empty():
+				errors.append("%s not in the %s loadout" % [sp0.id, k])
+				b.queue_free()
+				continue
+			var c := b.caster_of(sp)
+			c.hp = maxi(1, c.max_hp - 10)
+			# a target: a hero next to the caster, a corpse, or a minion
+			var spot := Vector2i(-1, -1)
+			for dv in Game.DIRS:
+				var q: Vector2i = c.pos + dv
+				if Game.can_step(c.pos, q) and b.empty_tile(q):
+					spot = q
+					break
+			var h = b.mk_unit("h", "knight", spot)
+			h.conf = 1
+			h.hex = 1
+			var hp0: int = h.hp
+			var target := spot
+			if sp.kind in ["corpse", "ally"]:
+				# an empty tile next to the knight, in range: a corpse to blow up or a minion to give
+				for dv in Game.DIRS:
+					var q: Vector2i = spot + dv
+					if Game.is_open(q) and b.empty_tile(q) and Game.man(q, c.pos) <= sp.range:
+						target = q
+						break
+				if sp.kind == "corpse":
+					b.corpses[target] = true
+				else:
+					b.mk_unit("p", "goblin", target)
+			if sp.id == "puppet":
+				h.conf = 0
+			var gold0 := Game.gold
+			var chp0: int = c.hp
+			if not b.can_cast(sp) or (sp.kind != "self" and not target in b.spell_tiles(sp)):
+				errors.append("%s can't be cast (tiles %s, target %s)" % [sp.id, b.spell_tiles(sp).size(), target])
+			else:
+				await b.cast_spell(sp, c.pos if sp.kind == "self" else target)
+				var did: bool = h.hp < hp0 or (sp.id == "pact" and c.hp > chp0)
+				if sp.id == "rain" and Game.gold != gold0 - Battle.RAIN_GOLD: errors.append("Golden Rain cost %d gold" % (gold0 - Game.gold))
+				if sp.id in ["siphon", "bite", "mist"] and c.hp <= chp0: errors.append("%s didn't heal" % sp.id)
+				if sp.id == "puppet":
+					did = h.conf > 0   # no other hero to hit: it gets confused
+				if not did: errors.append("%s had no effect" % sp.id)
+			b.queue_free()
+	Game.meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": [], "mons": {}}
+	print("SPELLS: %s" % ("ok" if errors.is_empty() else "FAIL " + "; ".join(errors)))
+
+## A random level and random picks for a monster, so the scripted runs try many kits.
+func _random_kit(k: String) -> void:
+	Game.meta.souls = 100000
+	var to := randi_range(1, Data.MON_MAX_LVL)
+	while Game.mon_lvl(k) < to and Game.level_up(k):
+		pass
+	for at in Data.PERK_LEVELS:
+		if Game.mon_lvl(k) >= at:
+			Game.set_perk(k, at, randi() % 2)
+	for who in ["", "squire"]:
+		for sp in Game.known_spells(k, who):
+			if randi() % 2 == 0:
+				Game.equip_spell(k, who, sp.id)
+	Game.meta.souls = 0
 
 func _check_layouts() -> void:
 	for t in Data.ROOMS:
@@ -706,11 +991,14 @@ func _on_finished(won: bool) -> void:
 
 
 func _build_day() -> void:
-	var order := []
+	# a barracks and a spike workshop first, then a random pick, so every room gets tried
+	var order := ["barracks", "workshop"]
+	var rest := []
 	for t in Data.ROOMS:
-		if Data.ROOMS[t].get("owner", "") == Game.mk:
-			order.append(t)
-	order += ["barracks", "workshop", "treasury", "torture", "larder", "armory", "collapse", "cistern", "kennel"]
+		if not t in order and t != "lair":
+			rest.append(t)
+	rest.shuffle()
+	order += rest
 	# grow south (away from the gate) once every chamber in reach holds a room
 	var room := false
 	for i in Game.slots.size():
@@ -744,7 +1032,7 @@ func _build_day() -> void:
 		if Game.trap_unlocked(t):
 			Game.trap_mode = t
 			for i in 60:
-				if Game.traps.size() >= Game.trap_cap() or Game.gold < 15:
+				if not Game.can_place(t) or Game.gold < 15:
 					break
 				var p := Vector2i(randi() % Game.BW, Game.RS + randi() % (Game.BH - Game.RS))
 				if Game.is_open(p) and not Game.traps.has(p):
@@ -766,8 +1054,15 @@ func _player_turn(b: Battle, rounds: int, used: Dictionary) -> void:
 			tiles = tiles.filter(func(p): return hs.any(func(h): return Game.man(h.pos, p) == 1))
 		if sp.id == "lure":
 			tiles = tiles.filter(func(p): return Game.traps.has(p))
-		if sp.id == "snap" and not hs.any(func(h): return Game.man(h.pos, b.mon.pos) <= 5):
+		if sp.id == "coin" and Game.gold < 10:
 			continue
+		var cp: Vector2i = b.caster_of(sp).pos
+		if sp.id in ["mist", "cleave"] and not hs.any(func(h): return Game.man(h.pos, cp) <= (2 if sp.id == "mist" else 1)):
+			continue
+		if sp.id == "pact" and b.mon.hp * 2 > b.mon.max_hp:
+			continue
+		if sp.id == "boom":
+			tiles = tiles.filter(func(p): return hs.any(func(h): return Game.man(h.pos, p) <= 1))
 		if sp.kind != "self" and tiles.is_empty():
 			continue
 		await b.cast_spell(sp, b.caster_of(sp).pos if sp.kind == "self" else tiles[0])
@@ -796,6 +1091,7 @@ func _player_turn(b: Battle, rounds: int, used: Dictionary) -> void:
 
 
 func _play(mk: String) -> void:
+	_random_kit(mk)
 	Game.new_run(mk)
 	var used := {}
 	var line := ""
@@ -826,5 +1122,335 @@ func _play(mk: String) -> void:
 		b.resolve_win()
 		line += " n%d ok(hp %d%s)" % [Game.day, hp, ", %dx%d" % [Game.SW, Game.SH] if Game.SW * Game.SH > 9 else ""]
 		b.queue_free()
-		Game.dawn(Game.boon_choices()[0])
-	print("%s:%s  spells %s" % [mk, line, used])
+		Game.dawn(Game.gift_choices()[0] if Game.gift_due(Game.day) else {})
+		_shop()
+		_auto_arm()
+	print("%s (Lv %d):%s  spells %s" % [mk, Game.mon_lvl(mk), line, used])
+	Game.meta.mons = {}
+
+
+## Spends a scripted run's gold at the trader: a random affordable item or two.
+func _shop() -> void:
+	if not Game.trader_here():
+		return
+	for n in 2:
+		var can := []
+		for i in Game.trader.stock.size():
+			if Game.can_buy(i):
+				can.append(i)
+		if can.is_empty() or Game.gold < 60:
+			return
+		Game.buy(can.pick_random())
+
+
+## Patron gifts and the wandering trader: timing, effects, buying, haggling, saving, and the
+## battle hooks of the new effects.
+func _rogue_test() -> void:
+	var errors := []
+	Game.new_run("lich")
+	# every gift applies and none repeats
+	for G in Data.GIFTS:
+		if not Game.gift_ok(G.id): errors.append("%s not offered on a fresh run" % G.id)
+	var ch := Game.gift_choices()
+	if ch.size() != 3: errors.append("%d gift choices" % ch.size())
+	Game.dawn(Data.gift_by_id("tithe"))
+	if Game.fx("dawn_gold") != 20 or Game.gift_ok("tithe") or not "Tithe of Fear" in Game.taken: errors.append("Tithe of Fear not applied")
+	for G in Game.gift_choices():
+		if G.id == "tithe": errors.append("a taken gift was offered again")
+	var hp0 := Game.mmax
+	Game.apply_gift("bloodpact")
+	if Game.mmax != hp0 - 15 or Game.b.atk != 7: errors.append("Blood Pact gave %d HP, %d atk" % [Game.mmax - hp0, Game.b.atk])
+	Game.apply_gift("cursed")
+	if Game.make_party(4).size() != Game.party_size(4) + 1: errors.append("Cursed Ground didn't add a hero")
+	if absf(Game.soul_mult() - 1.5) > 0.01: errors.append("Cursed Ground souls x%.2f" % Game.soul_mult())
+	Game.apply_gift("hoard")
+	Game.gold = 200
+	var g0 := Game.gold
+	Game.dawn({})
+	var tribute := Game.TRIBUTE + 20 + Data.treasury_gold(Game.lvl("treasury"))
+	if Game.gold != g0 + tribute + 20: errors.append("Dragon's Hoard: %d gold at dawn, wanted %d" % [Game.gold - g0, tribute + 20])
+	# the trader: day 3, 6, 9..., not in the tutorial, gone the next day
+	if Game.trader_due(2) or not Game.trader_due(3) or not Game.trader_due(6): errors.append("trader days wrong")
+	Game.new_run("vampire")
+	Game.dawn({})
+	if Game.trader_here(): errors.append("trader came on day 2")
+	Game.dawn({})
+	if not Game.trader_here() or Game.trader.stock.size() != Game.TRADER_RELICS + Game.TRADER_WARES + 3: errors.append("trader on day 3: %s" % [Game.trader])
+	Game.gold = 1000
+	var ri := -1
+	for i in Game.trader.stock.size():
+		if Game.is_relic(Game.trader.stock[i].id):
+			ri = i
+			break
+	var rid: String = Game.trader.stock[ri].id
+	var price := Game.ware_price(rid)
+	var before := Game.perk(Data.relic_by_id(rid).fx.keys()[0])
+	if not Game.buy(ri) or Game.gold != 1000 - price or Game.item_of("monster", "relic") != rid: errors.append("buying %s failed (it should go straight to your monster)" % rid)
+	if Game.perk(Data.relic_by_id(rid).fx.keys()[0]) <= before: errors.append("%s had no effect" % rid)
+	if Game.buy(ri): errors.append("bought the same item twice")
+	# haggling rolls new stock, never a relic you own, and costs more each time
+	var hc := Game.haggle_cost()
+	Game.haggle()
+	if Game.haggle_cost() != hc + Game.HAGGLE_STEP: errors.append("haggle cost didn't rise")
+	for e in Game.trader.stock:
+		if Game.is_relic(e.id) and Game.owns(e.id): errors.append("trader offers a relic you own")
+	# wares
+	Game.mhp = 5
+	Game.trader.stock = [{"id": "draught", "sold": false}, {"id": "ale", "sold": false}, {"id": "souljar", "sold": false}, {"id": "mortar", "sold": false}]
+	var h0 := Game.hours
+	Game.buy(0)
+	Game.buy(1)
+	Game.buy(2)
+	if Game.mhp != 35 or Game.hours != h0 + 1 or Game.souls != 8: errors.append("wares: hp %d, hours %d, souls %d" % [Game.mhp, Game.hours - h0, Game.souls])
+	if Game.can_buy(3): errors.append("Mason's Mortar for sale with nothing smashed")
+	# a save keeps gifts, relics and the stall
+	Game.apply_gift("iron")
+	Game.run_path = "user://sim_run.save"
+	Game.fast = false
+	Game.save_run()
+	Game.new_run("lich")
+	Game.load_run()
+	if not Game.owns(rid) or not "iron" in Game.gifts or Game.fx("mon_armor") < 1 or not Game.trader_here(): errors.append("save lost gifts, relics or the trader")
+	Game.clear_run()
+	Game.fast = true
+	Game.run_path = "user://run.save"
+	Game.dawn({})
+	if Game.trader_here(): errors.append("the trader stayed past nightfall")
+	# battle hooks: thorns, Spare Heart, Blood Price, Restless Dead
+	Game.new_run("lich")
+	Game.gear = {"monster": {"relic": "heart"}}
+	Game.add_minion("goblin", true)
+	Game.minions[0].gear = {"relic": "collar"}
+	Game.gifts = ["bloodprice", "restless"]
+	Game.bonus = {}
+	Game._recalc()
+	var b := Battle.new()
+	add_child(b)
+	b.start()
+	var spot := Vector2i(-1, -1)
+	for dv in Game.DIRS:
+		if Game.can_step(b.mon.pos, b.mon.pos + dv) and b.empty_tile(b.mon.pos + dv):
+			spot = b.mon.pos + dv
+			break
+	var h = b.mk_unit("h", "knight", spot)
+	var khp: int = h.hp
+	await b.attack(h, b.mon)
+	if h.hp != khp - 2: errors.append("Thorned Collar did %d" % (khp - h.hp))
+	b.mon.hp = 3
+	b.hurt(b.mon, 50, h)
+	if b.mon.hp != 20: errors.append("Spare Heart left %d HP" % b.mon.hp)
+	b.hurt(b.mon, 50, h)
+	if b.mon.hp > 0: errors.append("Spare Heart saved twice in a night")
+	b.mon.hp = 10
+	Game.traps[spot] = "spikes"
+	h.pos = spot
+	await b.spring_trap(h)
+	if b.mon.hp != 14: errors.append("Blood Price healed to %d" % b.mon.hp)
+	Game.traps.erase(spot)
+	b.queue_free()
+	Game.new_run("lich")
+	print("ROGUE: %s" % ("ok" if errors.is_empty() else "FAIL " + "; ".join(errors)))
+
+
+## A scripted run hands its best spare weapon to the monster and the rest to unarmed minions.
+func _auto_arm() -> void:
+	var i := 0
+	while i < Game.stash.size():
+		var slot := Data.slot_of(Game.stash[i])
+		var bare := Game.minions.filter(func(m): return Game.item_of(m, slot) == "")
+		if bare.is_empty():
+			i += 1
+			continue
+		Game.equip(bare[0], i)
+
+
+## Weapons and scrolls: stats, flags, scroll charges and undo, hero drops, losing a minion's
+## weapon, the forge and Hall of Scribes, trader stock, gifts and saving.
+func _arms_test() -> void:
+	var errors := []
+	Game.new_run("vampire")
+	Game.gold = 999
+	Game.hours = 99
+	Game.build(4, "barracks")
+	# gear goes straight onto the monster while a slot is free, one per slot
+	Game.add_item("axe")
+	Game.add_item("buckler")
+	if Game.item_of("monster", "weapon") != "axe" or Game.item_of("monster", "armor") != "buckler" or not Game.stash.is_empty(): errors.append("auto-equip: %s / %s" % [Game.gear, Game.stash])
+	Game.add_item("dagger")
+	Game.equip("monster", Game.stash.find("dagger"))
+	if Game.item_of("monster", "weapon") != "dagger" or Game.stash != ["axe"]: errors.append("swap didn't return the axe: %s" % [Game.stash])
+	Game.equip("monster", Game.stash.find("axe"))
+	# relics work while anyone carries one, a minion too
+	Game.add_item("collar")
+	var m: Dictionary = Game.minions[0]
+	Game.add_item("spear")
+	Game.equip(m, Game.stash.find("spear"))
+	Game.add_item("heart")
+	Game.equip(m, Game.stash.find("heart"))
+	if Game.perk("thorns") != 2 or Game.perk("cheat_death") != 20: errors.append("carried relics: thorns %d, heart %d" % [Game.perk("thorns"), Game.perk("cheat_death")])
+	var b := Battle.new()
+	add_child(b)
+	b.start()
+	if b.mon.atk != Data.MONSTERS.vampire.atk + 3: errors.append("axe gave %d attack" % (b.mon.atk - Data.MONSTERS.vampire.atk))
+	if b.mon.armor != Data.MONSTERS.vampire.get("armor", 0) + 1: errors.append("buckler gave %d armor" % b.mon.armor)
+	var mu: Battle.Unit = null
+	for u in b.units:
+		if u.mid == m.mid:
+			mu = u
+	if mu == null or mu.rng != 2: errors.append("the goblin's spear didn't add range")
+	if mu != null and mu.rel.get("id", "") != "heart": errors.append("the goblin's relic isn't on its unit")
+	# scrolls: on the bar, use a charge, undo gives it back, crumble at zero
+	b.queue_free()
+	Game.add_item("lightning")
+	Game.add_item("mending")
+	Game.scrolls[1].ch = 1
+	b = Battle.new()
+	add_child(b)
+	b.start()
+	var bar := b.specials_of(b.mon)
+	if bar.size() != Game.M.specials.size() + 2: errors.append("scrolls not on the bar: %d spells" % bar.size())
+	var sp := b.spell("scroll0")
+	var free_spot := b.mon.pos
+	for t in b.spell_tiles({"id": "x", "kind": "tile", "range": 3}):
+		if Game.man(t, b.mon.pos) >= 2 and Game.los(b.mon.pos, t):
+			free_spot = t
+			break
+	var h = b.mk_unit("h", "knight", free_spot)
+	var hp0: int = h.hp
+	if not h.pos in b.spell_tiles(sp):
+		errors.append("lightning can't reach a hero 3 away")
+	else:
+		await b.cast_spell(sp, h.pos)
+		if h.hp >= hp0 or Game.scrolls[0].ch != 2: errors.append("lightning: %d damage, %d charges" % [hp0 - h.hp, Game.scrolls[0].ch])
+		b.undo()
+		if Game.scrolls[0].ch != 3 or b.spell("scroll0").is_empty(): errors.append("undo didn't give the charge back")
+	b.mon.hp = 5
+	b.mon.acted = false
+	await b.cast_spell(b.spell("scroll1"), b.mon.pos)
+	if b.mon.hp != 20 or Game.scrolls.size() != 1: errors.append("Mending: hp %d, %d scrolls left" % [b.mon.hp, Game.scrolls.size()])
+	# a boss always drops gear, picked up when you win. A room's minion that falls keeps its post
+	# and gear; a hired one is gone, gear and all
+	var hired: Dictionary = {}
+	Game.add_minion("ogre", true)
+	hired = Game.minions[-1]
+	Game.add_item("cloak")
+	Game.equip(hired, Game.stash.find("cloak"))
+	var post0 = m.post
+	var hu: Battle.Unit = b.mk_unit("p", "ogre", b.mon.pos + Vector2i(1, 0))
+	hu.mid = hired.mid
+	hu.hp = 0   # it falls tonight
+	var pal = b.mk_unit("h", "paladin", b.mon.pos + Vector2i(0, -2))
+	b.hurt(pal, 999, b.mon, true)
+	if b.drops.size() != 1: errors.append("the paladin dropped %d items" % b.drops.size())
+	mu = null
+	for u in b.units:
+		if u.mid == m.mid:
+			mu = u
+	b.hurt(mu, 999, h, true)
+	var n0 := Game.stash.size() + Game.scrolls.size()
+	var r := b.resolve_win()
+	if Game.stash.size() + Game.scrolls.size() != n0 + 1 or r.found.size() != 1: errors.append("the boss's drop wasn't picked up")
+	if hired in Game.minions or "cloak" in Game.stash: errors.append("a fallen hired ogre came back or kept its cloak")
+	if not m in Game.minions or Game.item_of(m, "weapon") != "spear" or Game.item_of(m, "relic") != "heart" or m.post != post0: errors.append("the fallen goblin lost its post or gear")
+	if Game.perk("cheat_death") != 20: errors.append("the fallen goblin's Spare Heart stopped working")
+	b.queue_free()
+	# a pierce weapon ignores armor
+	Game.add_item("hammer")
+	Game.equip("monster", Game.stash.find("hammer"))
+	if Game.item_of("monster", "weapon") != "hammer": errors.append("no hammer")
+	b = Battle.new()
+	add_child(b)
+	b.start()
+	var kn = b.mk_unit("h", "knight", b.mon.pos + Vector2i(0, -1))
+	kn.hp = 100
+	kn.max_hp = 100
+	await b.attack(b.mon, kn)
+	if 100 - kn.hp != b.atk_of(b.mon): errors.append("the warhammer didn't ignore armor: %d of %d" % [100 - kn.hp, b.atk_of(b.mon)])
+	b.queue_free()
+	# tearing down a room gives its minions' weapons back
+	Game.fill_rooms()
+	var gob: Dictionary = Game.minions.filter(func(x): return x.home == 4 and not x.free)[0]
+	Game.add_item("dagger")
+	Game.equip(gob, Game.stash.find("dagger"))
+	Game.add_item("cloak")
+	Game.equip(gob, Game.stash.find("cloak"))
+	Game.demolish(4)
+	if not "dagger" in Game.stash or not "cloak" in Game.stash: errors.append("demolish lost a minion's gear")
+	# the scroll cap sells the extras
+	Game.scrolls = []
+	for i in Game.SCROLL_CAP + 1:
+		Game.add_item("frost")
+	if Game.scrolls.size() != Game.SCROLL_CAP: errors.append("carried %d scrolls" % Game.scrolls.size())
+	# forge and Hall of Scribes make gear at dawn
+	Game.new_run("lich")
+	Game.gold = 999
+	Game.hours = 99
+	Game.build(4, "forge")
+	Game.upgrade(4)
+	Game.upgrade(4)
+	Game.build(3, "scribes")
+	Game.upgrade(3)
+	Game.upgrade(3)
+	Game.dawn({})
+	var made := Game.stash.size() + Game._slots("monster").size()
+	if made != 1 or Game.scrolls.size() != 1: errors.append("level 3 forge/scribes made %d gear, %d scrolls" % [made, Game.scrolls.size()])
+	# the trader stocks a weapon and a scroll
+	Game.dawn({})
+	var arms := 0
+	for e in Game.trader.get("stock", []):
+		if Game.is_item(e.id):
+			arms += 1
+	if arms != 3: errors.append("trader has %d weapons, armor and scrolls" % arms)
+	# gifts
+	Game.gear = {}
+	Game.stash = []
+	Game.apply_gift("blessed")
+	if Data.weapon_by_id(Game.item_of("monster", "weapon")).get("tier", 0) != 3: errors.append("Black Blessing gave %s" % [Game.gear])
+	Game.scrolls = []
+	Game.apply_gift("tome")
+	if Game.scrolls.size() != 2 or Game.scrolls[0].ch != Data.scroll_by_id(Game.scrolls[0].id).charges + 1: errors.append("Forbidden Tome: %s" % [Game.scrolls])
+	Game.minions = []
+	Game.add_minion("goblin", true)
+	Game.apply_gift("warband")
+	if Game.item_of(Game.minions[0], "weapon") == "": errors.append("Armed Warband left a goblin bare")
+	# a save keeps gear, the armory and scrolls
+	Game.add_item("aegis")
+	Game.add_item("tower")
+	var gear := Game.gear.duplicate(true)
+	var st := Game.stash.duplicate()
+	var sc := Game.scrolls.duplicate(true)
+	Game.run_path = "user://sim_run.save"
+	Game.fast = false
+	Game.save_run()
+	Game.new_run("vampire")
+	Game.load_run()
+	if Game.gear != gear or Game.stash != st or Game.scrolls != sc or Game.item_of(Game.minions[0], "weapon") == "": errors.append("save lost the armory")
+	Game.clear_run()
+	Game.fast = true
+	Game.run_path = "user://run.save"
+	# every scroll casts at a real target
+	for S in Data.SCROLLS:
+		Game.new_run("lich")
+		Game.add_item(S.id)
+		b = Battle.new()
+		add_child(b)
+		b.start()
+		var spot := b.mon.pos + Vector2i(0, -2)
+		var hh = b.mk_unit("h", "knight", spot)
+		hh.hp = 50
+		hh.max_hp = 50
+		b.mon.hp = 10
+		var s0 := b.spell("scroll0")
+		var tiles := b.spell_tiles(s0)
+		var tgt: Vector2i = b.mon.pos if s0.kind == "self" else (spot if spot in tiles else (tiles[0] if tiles.size() > 0 else spot))
+		var pos0: Vector2i = b.mon.pos
+		var units0 := b.units.size()
+		if s0.kind != "self" and not tgt in tiles:
+			errors.append("%s has no target" % S.id)
+		else:
+			await b.cast_spell(s0, tgt)
+			var did: bool = hh.hp < 50 or b.mon.hp > 10 or b.mon.pos != pos0 or b.units.size() > units0 or hh.conf > 0 or b.mon.shield > 0
+			if not did: errors.append("%s did nothing" % S.id)
+		b.queue_free()
+	Game.new_run("lich")
+	print("ARMS: %s" % ("ok" if errors.is_empty() else "FAIL " + "; ".join(errors)))

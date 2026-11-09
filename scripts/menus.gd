@@ -1,12 +1,13 @@
 extends Control
-## The menus: the title screen (Continue, New run, Room catalog, Settings, Exit game), the room
-## catalog, settings, the in-game pause menu and a yes/no confirm box. Sits above everything
+## The menus: the title screen (Continue, New run, Monsters, Room catalog, Settings, Exit game),
+## the monster screen (levels, perks, spells), the room catalog, settings, the in-game pause menu and a yes/no confirm box. Sits above everything
 ## else in main.gd and borrows its widget helpers.
 
 var ui            # main.gd
 
 var title_scr: Control
 var catalog_ov: Control
+var mons_ov: Control
 var settings_ov: Control
 var pause_ov: Control
 var stats_ov: Control
@@ -17,6 +18,8 @@ var tut_btn: Button
 var footer: Label
 var _back: Callable            # where Back goes from the catalog and settings
 var _cat_tab := ""             # "" for common rooms, otherwise a monster key
+var _cat_filter := ""          # a room category to show, or "" for all
+var _mon_tab := ""             # the monster shown on the monster screen
 
 
 func build(main_ui) -> void:
@@ -26,23 +29,26 @@ func build(main_ui) -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title_scr = _title_screen()
 	catalog_ov = ui._overlay(self)
+	mons_ov = ui._overlay(self)
 	settings_ov = ui._overlay(self)
 	pause_ov = ui._overlay(self)
 	stats_ov = ui._overlay(self)
 	confirm_ov = ui._overlay(self)
 
 func apply_layout(vp: Vector2) -> void:
-	for e in [[catalog_ov, 1080.0], [stats_ov, 760.0], [settings_ov, 640.0], [pause_ov, 420.0], [confirm_ov, 520.0]]:
+	for e in [[catalog_ov, 1080.0], [mons_ov, 1080.0], [stats_ov, 760.0], [settings_ov, 640.0], [pause_ov, 420.0], [confirm_ov, 520.0]]:
 		e[0].get_meta("card").custom_minimum_size.x = minf(e[1], vp.x - 40.0)
 		e[0].get_meta("center").custom_minimum_size = vp
 	if catalog_ov.visible:
 		render_catalog()
+	if mons_ov.visible:
+		render_monsters()
 
 func is_open() -> bool:
-	return title_scr.visible or catalog_ov.visible or settings_ov.visible or pause_ov.visible or confirm_ov.visible or stats_ov.visible
+	return title_scr.visible or catalog_ov.visible or mons_ov.visible or settings_ov.visible or pause_ov.visible or confirm_ov.visible or stats_ov.visible
 
 func hide_all() -> void:
-	for o in [title_scr, catalog_ov, settings_ov, pause_ov, confirm_ov, stats_ov]:
+	for o in [title_scr, catalog_ov, mons_ov, settings_ov, pause_ov, confirm_ov, stats_ov]:
 		o.visible = false
 
 func _box(o: Control) -> VBoxContainer:
@@ -113,6 +119,7 @@ func _title_screen() -> Control:
 	cont_btn = _menu_btn(btns, "Continue", func(): ui.continue_run(), "PrimaryButton")
 	_menu_btn(btns, "New run", _new_run)
 	tut_btn = _menu_btn(btns, "Tutorial", _tutorial)
+	_menu_btn(btns, "Monsters", func(): open_monsters(show_title))
 	_menu_btn(btns, "Room catalog", func(): open_catalog(show_title))
 	_menu_btn(btns, "Settings", func(): open_settings(show_title))
 	var ex := _menu_btn(btns, "Exit game", func(): get_tree().quit(), "GhostButton")
@@ -174,15 +181,8 @@ func open_catalog(back: Callable) -> void:
 func render_catalog() -> void:
 	var v := _box(catalog_ov)
 	var head := _header(v, "Room catalog")
-	var souls: Label = ui.lbl("%d souls" % Game.meta.souls, 18, "#c9a7ff", false)
-	souls.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	head.add_child(souls)
-	head.move_child(souls, 1)
-	var how := "Every build or upgrade takes 1 hour. Each room type can be built once. Expand from the Layout panel to make room for more. Use Arrange to move minions and to carry furniture between any rooms to wall off paths; heroes who can't reach you smash through it."
-	if ui.in_run:
-		how += " Unlock new rooms from the title screen between runs."
-	else:
-		how += " Spend souls to unlock a room for every future run."
+	var how := "Every room is open from your first run. Every build or upgrade takes 1 hour. Each room type can be built once. Expand from the Layout panel to make room for more. Use Arrange to move minions and to carry furniture between any rooms to wall off paths; heroes who can't reach you smash through it."
+	how += " Rooms under a monster's name can only be built by that monster."
 	v.add_child(ui.lbl(how, 15, "#a7998f"))
 
 	var tabs := HFlowContainer.new()
@@ -191,13 +191,8 @@ func render_catalog() -> void:
 	v.add_child(tabs)
 	var group := ButtonGroup.new()
 	for k in [""] + Data.MONSTERS.keys():
-		var rooms := _rooms_of(k)
-		var open := 0
-		for t in rooms:
-			if Game.is_unlocked(t):
-				open += 1
 		var b := Button.new()
-		b.text = "%s  %d/%d" % ["Common rooms" if k == "" else Data.MONSTERS[k].name, open, rooms.size()]
+		b.text = "%s  %d" % ["Common rooms" if k == "" else Data.MONSTERS[k].name, _rooms_of(k).size()]
 		b.theme_type_variation = "GhostButton"
 		b.toggle_mode = true
 		b.button_group = group
@@ -209,15 +204,55 @@ func render_catalog() -> void:
 			render_catalog())
 		tabs.add_child(b)
 
-	var grid := GridContainer.new()
-	grid.columns = 2 if catalog_ov.get_meta("card").custom_minimum_size.x >= 900.0 else 1
-	grid.add_theme_constant_override("h_separation", 12)
-	grid.add_theme_constant_override("v_separation", 12)
-	v.add_child(grid)
+	# category chips for this tab, then one section per category
+	var by_cat := {}
 	for t in _rooms_of(_cat_tab):
-		var e := _room_entry(t)
-		e.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		grid.add_child(e)
+		var c: String = Data.ROOMS[t].cat
+		if not by_cat.has(c):
+			by_cat[c] = []
+		by_cat[c].append(t)
+	if _cat_filter != "" and not by_cat.has(_cat_filter):
+		_cat_filter = ""
+	var chips := HFlowContainer.new()
+	chips.add_theme_constant_override("h_separation", 6)
+	chips.add_theme_constant_override("v_separation", 6)
+	v.add_child(chips)
+	var cg := ButtonGroup.new()
+	var opts := [["", "All categories", "#ede3cd"]]
+	for c in Data.CATS:
+		if by_cat.has(c.id):
+			opts.append([c.id, "%s %d" % [c.name, by_cat[c.id].size()], c.col])
+	for o in opts:
+		var b := Button.new()
+		b.text = o[1]
+		b.theme_type_variation = "GhostButton"
+		b.toggle_mode = true
+		b.button_group = cg
+		b.button_pressed = _cat_filter == o[0]
+		b.add_theme_font_size_override("font_size", 14)
+		b.add_theme_color_override("font_color", ui.C(o[2]))
+		b.pressed.connect(func():
+			_cat_filter = o[0]
+			render_catalog())
+		chips.add_child(b)
+	var cols := 2 if catalog_ov.get_meta("card").custom_minimum_size.x >= 900.0 else 1
+	for c in Data.CATS + [Data.cat_info("core")]:
+		if not by_cat.has(c.id) or (_cat_filter != "" and _cat_filter != c.id):
+			continue
+		var list: Array = by_cat[c.id]
+		list.sort_custom(func(a, b2): return Data.ROOMS[a].cost[0] < Data.ROOMS[b2].cost[0])
+		v.add_child(ui.title(c.name, c.col, 22))
+		if c.desc != "":
+			v.add_child(ui.lbl(c.desc, 14, "#a7998f"))
+		var grid := GridContainer.new()
+		grid.columns = cols
+		grid.add_theme_constant_override("h_separation", 12)
+		grid.add_theme_constant_override("v_separation", 12)
+		v.add_child(grid)
+		for t in list:
+			var e := _room_entry(t)
+			e.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			grid.add_child(e)
 
 func _rooms_of(k: String) -> Array:
 	var o := []
@@ -233,22 +268,31 @@ func _room_entry(t: String) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 14)
 	p.add_child(row)
-	var unlocked := Game.is_unlocked(t)
 	var prev := RoomPreview.new()
 	prev.room = t
 	prev.custom_minimum_size = Vector2(120, 120)
 	prev.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	if not unlocked:
-		prev.modulate = Color(1, 1, 1, 0.4)
 	row.add_child(prev)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(v)
-	var status := "Always yours" if R.get("fixed", false) else ("Starter room" if not R.has("unlock") else ("Unlocked" if unlocked else "Locked"))
-	var scol := "#ff9a8a" if not unlocked else ("#8fd18f" if R.has("unlock") else "#a7998f")
-	v.add_child(ui.lbl(status.to_upper(), 11, scol))
+	var ci := Data.cat_info(R.cat)
+	var tag := HBoxContainer.new()
+	tag.add_theme_constant_override("separation", 8)
+	var parts := []
+	if R.get("fixed", false):
+		parts.append(["ALWAYS YOURS", "#a7998f"])
+	elif R.has("owner"):
+		parts.append([(Data.MONSTERS[R.owner].name + " only").to_upper(), Data.MONSTERS[R.owner].col])
+	if R.cat != "core":
+		parts.append([ci.name.to_upper(), ci.col])
+	for pt in parts:
+		var l: Label = ui.lbl(pt[0], 11, pt[1])
+		l.autowrap_mode = TextServer.AUTOWRAP_OFF   # side by side in a row: don't wrap to a sliver
+		tag.add_child(l)
+	v.add_child(tag)
 	v.add_child(ui.title(R.name, R.col, 22))
 	var costs := []
 	for l in R.cost.size():
@@ -262,26 +306,17 @@ func _room_entry(t: String) -> Control:
 	if R.has("recruit"):
 		var U: Dictionary = Data.UNITS[R.recruit]
 		v.add_child(ui.lbl("%s: %d HP, hits for %d, moves %d. Free with the room." % [U.name, U.hp, U.atk, U.move], 13, "#a7998f"))
-	if not unlocked:
-		var c: int = R.unlock
-		if ui.in_run:
-			v.add_child(ui.lbl("Costs %d souls. Unlock it from the title screen." % c, 13, "#ff9a8a"))
-		else:
-			var b := Button.new()
-			b.text = "Unlock for %d souls" % c if Game.meta.souls >= c else "Needs %d souls (you have %d)" % [c, Game.meta.souls]
-			b.theme_type_variation = "PrimaryButton"
-			b.disabled = Game.meta.souls < c
-			b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-			b.pressed.connect(func():
-				if Game.unlock_room(t):
-					render_catalog())
-			v.add_child(b)
+	# how much this room gets used across all your runs
+	var use: Array = Game.meta.get("room_stats", {}).get(t, [0, 0])
+	if not R.get("fixed", false):
+		v.add_child(ui.lbl("Built in %d run%s · stood through %d night%s" % [int(use[0]), "" if int(use[0]) == 1 else "s", int(use[1]), "" if int(use[1]) == 1 else "s"]
+			if int(use[0]) > 0 else "Never built yet", 12, "#8a7f90"))
 	return p
 
 
 # ---------------------------------------------------------------- your monster
 
-## A sheet with the monster's current numbers, after rooms, boons and Dread. For a duo,
+## A sheet with the monster's current numbers, after rooms, gifts, relics and Dread. For a duo,
 ## one column per unit. Pass an empty Callable to just close it again.
 func open_stats(back: Callable) -> void:
 	if not ui.in_run:
@@ -291,9 +326,15 @@ func open_stats(back: Callable) -> void:
 	render_stats()
 	stats_ov.visible = true
 
-func render_stats() -> void:
-	var v := _box(stats_ov)
-	_header(v, "Your monster")
+## into: a day-column panel to draw the sheet in (stacked for the narrow column), else the overlay.
+func render_stats(into: VBoxContainer = null) -> void:
+	var side := into != null
+	var v: VBoxContainer = into if side else _box(stats_ov)
+	if side:
+		ui.clear(v)
+		v.add_child(ui.h3("Your monster"))
+	else:
+		_header(v, "Your monster")
 	# at night read the live units; by day build throwaway ones so the numbers match a fight
 	var b: Battle = ui.battle
 	var temp := b == null
@@ -302,7 +343,7 @@ func render_stats() -> void:
 		b.mon = b.mk_unit("p", "monster", Game.monster_start())
 		if Game.duo():
 			b.squire = b.mk_unit("p", "squire", Game.squire_start())
-	var row := HBoxContainer.new()
+	var row: BoxContainer = VBoxContainer.new() if side else HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	v.add_child(row)
 	for u in [b.mon, b.squire]:
@@ -312,8 +353,27 @@ func render_stats() -> void:
 			row.add_child(c)
 	if Game.duo():
 		v.add_child(ui.lbl("Bond: within %d tiles of each other, both deal +1 damage and the Dark Lord's spells recharge 1 turn faster." % Data.oath_range(Game.lvl("oathstone")), 14, "#b89cff"))
-	v.add_child(ui.h3("Dark boons"))
-	v.add_child(ui.lbl(", ".join(Game.taken) if Game.taken.size() > 0 else "None yet. Survive a night to earn one.", 14, "#c9a7ff" if Game.taken.size() > 0 else "#a7998f"))
+	v.add_child(ui.h3("Perks"))
+	var pk := []
+	for id in Game.kit.get("perks", []):
+		var P := Data.perk_by_id(id)
+		pk.append("%s: %s" % [P.name, P.desc])
+	v.add_child(ui.lbl("\n".join(pk) if pk.size() > 0 else "None. Level your monster up with souls between runs.", 14, "#c9a7ff" if pk.size() > 0 else "#a7998f"))
+	v.add_child(ui.h3("Patron gifts"))
+	var gl := []
+	for id in Game.gifts:
+		var G := Data.gift_by_id(id)
+		gl.append("%s: %s" % [G.name, G.desc])
+	if gl.is_empty() and Game.taken.size() > 0:
+		gl = Game.taken.duplicate()   # a run saved before gifts had ids
+	v.add_child(ui.lbl("\n".join(gl) if gl.size() > 0 else "None yet. Your patron offers one after your first night.", 14, "#c9a7ff" if gl.size() > 0 else "#a7998f"))
+	if Game.carried_relics().size() > 0:
+		v.add_child(ui.h3("Relics"))
+		var rl := []
+		for id in Game.carried_relics():
+			var R := Data.relic_by_id(id)
+			rl.append("%s: %s" % [R.name, R.desc])
+		v.add_child(ui.lbl("\n".join(rl), 14, "#e4a648"))
 	if Game.mods.size() > 0:
 		var names := []
 		for o in Data.MODS:
@@ -348,7 +408,10 @@ func _unit_sheet(b: Battle, u) -> Control:
 			["Range", "%d tile%s" % [u.rng, "" if u.rng == 1 else "s"]],
 			["Move", "%d tiles" % b.move_of(u)],
 			["Armor", "%d (blocks %d damage per hit)" % [u.armor, u.armor] if u.armor > 0 else "none"],
-			["In your throne room", "takes 1 less damage"]]:
+			["Weapon", u.wpn.name if not u.wpn.is_empty() else "none"],
+			["Armor worn", u.arm.name if not u.arm.is_empty() else "none"],
+			["Relic", u.rel.name if not u.rel.is_empty() else "none"],
+			["On your throne", "takes 1 less damage"]]:
 		grid.add_child(ui.lbl(e[0], 14, "#a7998f", false))
 		var val: Label = ui.lbl(e[1], 15, "#ede3cd")
 		val.size_flags_horizontal = Control.SIZE_EXPAND_FILL   # wrapped text needs a width to wrap to
@@ -356,9 +419,11 @@ func _unit_sheet(b: Battle, u) -> Control:
 	var extra: int = dmg - D.atk
 	if extra > 0:
 		var why := []
-		if Game.b.atk > 0: why.append("+%d from boons" % Game.b.atk)
-		var rooms: int = extra - Game.b.atk - (1 if b.bonded() else 0)
-		if rooms > 0: why.append("+%d from rooms" % rooms)
+		if Game.b.atk > 0: why.append("+%d from patron gifts" % Game.b.atk)
+		var wa: int = (int(u.wpn.get("atk", 0)) + Game.fx("armed_atk")) if not u.wpn.is_empty() else 0
+		if wa != 0: why.append("%+d from the %s" % [wa, u.wpn.name])
+		var rooms: int = extra - Game.b.atk - wa - (1 if b.bonded() else 0)
+		if rooms > 0: why.append("+%d from rooms, perks and relics" % rooms)
 		if b.bonded(): why.append("+1 from the bond")
 		v.add_child(ui.lbl("Base damage %d, %s." % [D.atk, ", ".join(why)], 13, "#a7998f"))
 	for sp in b.specials_of(u):
@@ -370,6 +435,134 @@ func _unit_sheet(b: Battle, u) -> Control:
 		v.add_child(s)
 	return p
 
+
+# ---------------------------------------------------------------- monsters (levels, perks, spells)
+
+## Spend souls to level monsters, pick perks and choose which spells to bring.
+func open_monsters(back: Callable, key := "") -> void:
+	hide_all()
+	_back = back
+	if key != "":
+		_mon_tab = key
+	elif _mon_tab == "":
+		_mon_tab = Game.mk if ui.in_run and Game.mk != "" else Data.MONSTERS.keys()[0]
+	render_monsters()
+	mons_ov.visible = true
+
+func render_monsters() -> void:
+	var v := _box(mons_ov)
+	var head := _header(v, "Monsters")
+	var souls: Label = ui.lbl("%d souls" % Game.meta.souls, 18, "#c9a7ff", false)
+	souls.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(souls)
+	head.move_child(souls, 1)
+	var how := "Spend souls to level a monster up. Each level opens a perk choice, a new spell or a third spell slot. Swap perks and spells for free between runs."
+	if ui.in_run:
+		how += " Changes take effect from your next run."
+	v.add_child(ui.lbl(how, 15, "#a7998f"))
+
+	var tabs := HFlowContainer.new()
+	tabs.add_theme_constant_override("h_separation", 6)
+	tabs.add_theme_constant_override("v_separation", 6)
+	v.add_child(tabs)
+	var group := ButtonGroup.new()
+	for k in Data.MONSTERS:
+		var b := Button.new()
+		b.text = "%s  Lv %d" % [Data.MONSTERS[k].name, Game.mon_lvl(k)]
+		b.theme_type_variation = "GhostButton"
+		b.toggle_mode = true
+		b.button_group = group
+		b.button_pressed = k == _mon_tab
+		b.add_theme_color_override("font_color", ui.C(Data.MONSTERS[k].col))
+		b.pressed.connect(func():
+			_mon_tab = k
+			render_monsters())
+		tabs.add_child(b)
+
+	var k := _mon_tab
+	var M: Dictionary = Data.MONSTERS[k]
+	var lv := Game.mon_lvl(k)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 12)
+	v.add_child(top)
+	var name_box := VBoxContainer.new()
+	name_box.add_theme_constant_override("separation", 0)
+	name_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(name_box)
+	name_box.add_child(ui.lbl(M.role.to_upper(), 12, M.col))
+	name_box.add_child(ui.title("%s  ·  level %d of %d" % [M.name, lv, Data.MON_MAX_LVL], M.col, 26))
+	var up := Button.new()
+	up.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if lv >= Data.MON_MAX_LVL:
+		up.text = "Max level"
+		up.disabled = true
+	else:
+		var c := Game.level_cost(k)
+		up.text = "Level up: %s  (%d souls)" % [_reward_text(k, lv + 1), c]
+		up.theme_type_variation = "PrimaryButton"
+		up.disabled = Game.meta.souls < c
+		up.pressed.connect(func():
+			if Game.level_up(k):
+				render_monsters())
+	top.add_child(up)
+	v.add_child(ui.lbl(M.blurb, 14, "#b3a59b"))
+
+	# spells: one list per unit, equipped ones pressed
+	var cols := 2 if mons_ov.get_meta("card").custom_minimum_size.x >= 900.0 else 1
+	for who in ([""] + (["squire"] if M.has("partner") else [])):
+		var unit_name: String = M.partner.name if who == "squire" else M.name
+		var picked := Game.loadout(k, who)
+		v.add_child(ui.title("Spells%s  ·  bring %d" % ["" if not M.has("partner") else " for " + unit_name, Game.load_slots(k)], "#e4a648", 22))
+		var grid := GridContainer.new()
+		grid.columns = cols
+		grid.add_theme_constant_override("h_separation", 10)
+		grid.add_theme_constant_override("v_separation", 10)
+		v.add_child(grid)
+		for sp in Data.spells_of(k, who):
+			var open: bool = int(sp.get("lvl", 1)) <= lv
+			var on: bool = sp.id in picked
+			var tag := "Bringing" if on else ("Opens at level %d" % sp.get("lvl", 1) if not open else "Click to bring")
+			var c: Control = ui.opt(sp.name, "cd %d" % sp.cd, sp.desc, func(): _equip(k, who, sp.id), not open, on, tag, M.col if on else "#a7998f")
+			c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			grid.add_child(c)
+	if lv < 5:
+		v.add_child(ui.lbl("A third spell slot opens at level 5.", 13, "#8a7f90"))
+
+	# perks: one row of two per perk level
+	v.add_child(ui.title("Perks", "#e4a648", 22))
+	for i in Data.PERK_LEVELS.size():
+		var at: int = Data.PERK_LEVELS[i]
+		var pick := Game.perk_pick(k, at)
+		v.add_child(ui.lbl(("LEVEL %d" % at) + ("" if pick >= 0 else "  ·  locked"), 12, M.col if pick >= 0 else "#8a7f90"))
+		var row := GridContainer.new()
+		row.columns = 2 if cols == 2 else 1
+		row.add_theme_constant_override("h_separation", 10)
+		row.add_theme_constant_override("v_separation", 10)
+		v.add_child(row)
+		for j in 2:
+			var P: Dictionary = Data.PERKS[k][i][j]
+			var c: Control = ui.opt(P.name, "", P.desc, func(): _pick_perk(k, at, j), pick < 0, pick == j)
+			c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(c)
+
+## What reaching level l gives, in a few words.
+func _reward_text(k: String, l: int) -> String:
+	match Data.LEVEL_TRACK.get(l, ""):
+		"perk": return "perk choice"
+		"slot": return "third spell slot"
+		"spell":
+			for sp in Data.SPELL_POOL.get(k, []):
+				if int(sp.lvl) == l:
+					return sp.name
+	return "level %d" % l
+
+func _equip(k: String, who: String, id: String) -> void:
+	Game.equip_spell(k, who, id)
+	render_monsters()
+
+func _pick_perk(k: String, at: int, j: int) -> void:
+	Game.set_perk(k, at, j)
+	render_monsters()
 
 # ---------------------------------------------------------------- settings
 
@@ -389,6 +582,12 @@ func render_settings() -> void:
 		_setting_row(v, "Fullscreen", "Fill the whole screen. F11 also toggles it.", cb)
 	_setting_row(v, "Interface size", "Scale text, buttons and panels.", _segmented("ui_scale", Settings.UI_SCALES))
 	_setting_row(v, "Battle speed", "How fast heroes walk and attacks play out at night.", _segmented("battle_speed", Settings.SPEEDS))
+	var dev := CheckButton.new()
+	dev.button_pressed = Settings.dev_unlock_all
+	dev.toggled.connect(func(on):
+		Settings.set_value("dev_unlock_all", on)
+		Game.changed.emit())
+	_setting_row(v, "Dev: max monster levels", "Every monster counts as level %d, with every perk and spell, without spending souls. Your real levels and souls are kept." % Data.MON_MAX_LVL, dev)
 	if not ui.in_run:
 		var reset := Button.new()
 		reset.text = "Reset progress"
@@ -396,11 +595,14 @@ func render_settings() -> void:
 		reset.add_theme_color_override("font_color", ui.C("#ff9a8a"))
 		reset.pressed.connect(func():
 			confirm("Reset all progress?",
-				"This wipes your souls, unlocked rooms and best night, and abandons any run in progress. It can't be undone.",
+				"This wipes your souls, monster levels and best night, and abandons any run in progress. It can't be undone.",
 				"Reset everything", func():
 					Game.reset_meta()
 					open_settings(_back)))
-		_setting_row(v, "Progress", "Souls banked: %d · %d rooms unlocked" % [Game.meta.souls, Game.meta.rooms.size()], reset)
+		var lv := 0
+		for k in Data.MONSTERS:
+			lv += Game.mon_lvl(k)
+		_setting_row(v, "Progress", "Souls banked: %d · %d monster levels" % [Game.meta.souls, lv], reset)
 
 func _setting_row(v: VBoxContainer, name: String, desc: String, control: Control) -> void:
 	var row := HBoxContainer.new()
@@ -468,6 +670,26 @@ func render_pause() -> void:
 	resume.grab_focus()
 
 
+## The Menu tab of the day column: the same choices as the pause menu.
+func render_side_menu(v: VBoxContainer) -> void:
+	ui.clear(v)
+	v.add_child(ui.h3("Menu"))
+	v.add_child(ui.title("%s · day %d" % [Game.M.name, Game.day], "#e4a648", 22))
+	if Game.mods.size() > 0:
+		var names := []
+		for o in Data.MODS:
+			if o.id in Game.mods:
+				names.append(o.name)
+		v.add_child(ui.lbl("Dread: %s · souls ×%.2f" % [", ".join(names), Game.soul_mult()], 13, "#c9a7ff"))
+	_menu_btn(v, "Monsters and levels", func(): open_monsters(Callable(), Game.mk))
+	_menu_btn(v, "Room catalog", func(): open_catalog(Callable()))
+	_menu_btn(v, "Settings", func(): open_settings(Callable()))
+	_menu_btn(v, "Quit to title screen", func(): ui.quit_to_menu())
+	if Settings.can_quit():
+		_menu_btn(v, "Exit game", func(): get_tree().quit(), "GhostButton")
+	v.add_child(ui.lbl("Your run is saved. Continue picks up right here. Esc pauses the game.", 13, "#a7998f"))
+
+
 # ---------------------------------------------------------------- confirm box
 
 func confirm(head: String, body: String, yes: String, cb: Callable, no_text := "Cancel") -> void:
@@ -498,6 +720,7 @@ func confirm(head: String, body: String, yes: String, cb: Callable, no_text := "
 
 func go_back() -> void:
 	catalog_ov.visible = false
+	mons_ov.visible = false
 	settings_ov.visible = false
 	stats_ov.visible = false
 	if _back.is_valid():
@@ -516,7 +739,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if confirm_ov.visible:
 		confirm_ov.visible = false
-	elif catalog_ov.visible or settings_ov.visible or stats_ov.visible:
+	elif catalog_ov.visible or mons_ov.visible or settings_ov.visible or stats_ov.visible:
 		go_back()
 	elif pause_ov.visible:
 		pause_ov.visible = false
@@ -524,6 +747,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	elif ui.start_ov.visible:
 		show_title()
+	elif ui.trade_ov.visible:
+		ui.close_trader()
 	elif not ui.in_run or ui.pick_ov.visible or ui.over_ov.visible:
 		return
 	elif ui.battle != null and (ui.battle.sel != null or ui.hud.inspect != null or ui.battle.mode != ""):

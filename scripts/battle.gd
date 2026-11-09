@@ -41,6 +41,9 @@ class Unit:
 	var shield := 0         # damage a Dark Ward will still soak
 	var taunt: Unit = null  # Challenged: must go for this unit on its next turn
 	var rally := false      # Rallied by the Squire this turn
+	var wpn := {}           # the weapon it carries (Data.WEAPONS entry), or empty
+	var arm := {}           # the armor it wears (Data.ARMOR entry), or empty
+	var rel := {}           # the relic it carries (Data.RELICS entry), or empty
 
 var units: Array = []
 var mon: Unit
@@ -60,10 +63,22 @@ var decor_hp := {}   # Vector2i -> HP left on furniture heroes have started smas
 var reach := {}
 var threat := {}
 var revived := false
+## Whether the Spare Heart has saved a unit tonight.
+var spared := false
+## Gear slain heroes dropped tonight, picked up if you win.
+var drops := []
+## Scroll spells on the monster's bar tonight, built from Game.scrolls.
+var scroll_sp := []
 var used := {}
 var queue := []
 ## Trap tiles that have already fired tonight. Every trap fires once a night and re-arms at dawn.
 var sprung := {}
+## Snapshots taken before each of your actions this turn, newest last. See undo().
+var history := []
+## "hero id:chamber" pairs already hit by a room's enter_dmg tonight.
+var entered := {}
+## Skeletons the Charnel House has raised from dead heroes tonight.
+var raised := 0
 var fx := []        # {kind, a, b, col, t, max, r}
 var texts := []     # {p, s, col, t}
 var parts := []     # {p, v, col, t}
@@ -110,23 +125,51 @@ func mk_unit(side: String, kind: String, p: Vector2i) -> Unit:
 	if is_mon:
 		u.hp = Game.mhp
 		u.max_hp = Game.mmax
+		u.armor += Game.fx("mon_armor")
+		u.rng += Game.perk("mon_rng")
 	elif is_sq:
 		u.hp = Game.shp
 		u.max_hp = Game.smax
+		u.armor += Game.perk("sq_armor")
+	if is_mon or is_sq:
+		_arm(u, Game._slots(kind))
 	elif side == "h":
 		u.max_hp = maxi(1, roundi(D.hp * Game.hero_hp_mult(Game.day) * Game.veteran_hp(Game.day) * (1.25 if Game.has_mod("zealous") else 1.0)
-			* (1.0 - Data.scry_shaken(Game.lvl("scrying")))))
+			* (1.0 - Data.scry_shaken(Game.lvl("scrying"))) * (1.0 - minf(0.4, Game.fx("hero_shaken") / 100.0))))
 		u.hp = u.max_hp
 		u.atk += Game.hero_atk_bonus(Game.day) + (1 if Game.has_mod("hardened") else 0) + (1 if Game.is_company(Game.day) else 0)
 	else:
-		u.max_hp = D.hp + Game.b.get("minion_hp", 0)
-		if D.get("undead", false) and Game.mk == "necro":
-			var f := Game.lvl("boneforge")
-			u.max_hp += f * 2
-			u.atk += f
+		u.max_hp = D.hp + Game.b.get("minion_hp", 0) + Game.fx("minion_hp") + _kind_hp(kind)
+		u.armor += Game.fx("minion_armor")
 		u.hp = u.max_hp
 	units.append(u)
 	return u
+
+## Gives a unit the stats of the weapon, armor and relic it carries.
+func _arm(u: Unit, slots: Dictionary) -> void:
+	u.rel = Data.relic_by_id(str(slots.get("relic", "")))
+	var A := Data.armor_by_id(str(slots.get("armor", "")))
+	if not A.is_empty():
+		u.arm = A
+		u.armor += int(A.get("armor", 0))
+		u.move = maxi(1, u.move + int(A.get("move", 0)))
+		u.max_hp += int(A.get("hp", 0))
+		u.hp += int(A.get("hp", 0)) if u.hp > 0 else 0
+	var W := Data.weapon_by_id(str(slots.get("weapon", "")))
+	if W.is_empty():
+		return
+	u.wpn = W
+	u.atk = maxi(1, u.atk + int(W.get("atk", 0)) + Game.fx("armed_atk"))
+	u.move = maxi(1, u.move + int(W.get("move", 0)))
+	u.rng = maxi(u.rng + int(W.get("rng", 0)), int(W.get("rng_set", 0)))
+
+## Extra HP perks give one kind of minion.
+func _kind_hp(kind: String) -> int:
+	match kind:
+		"skeleton": return Game.perk("skel_hp")
+		"ghoul": return Game.perk("ghoul_hp")
+		"thrall": return Game.perk("thrall_hp")
+	return 0
 
 ## A name for a new hero that nobody else in tonight's raid already has, while any are left.
 func _hero_name(kind: String) -> String:
@@ -137,6 +180,7 @@ func _hero_name(kind: String) -> String:
 
 func start() -> void:
 	Game.clear_modes()
+	history = []
 	queue = Game.party.duplicate()
 	mon = mk_unit("p", "monster", Game.monster_start())
 	if Game.duo():
@@ -148,6 +192,9 @@ func start() -> void:
 	for m in Game.minions:
 		var u := mk_unit("p", m.kind, m.post)
 		u.mid = m.mid
+		_arm(u, Game._slots(m))
+	_build_scrolls()
+	_garrison()
 	admit(3)
 	if Game.is_company(Game.day):
 		Game.add_log("Night %d: %s, %d seasoned adventurers, stand at your gate." % [Game.day, Game.company_name(Game.party), Game.party.size()], "bad")
@@ -155,6 +202,21 @@ func start() -> void:
 		Game.add_log("Night %d: %d heroes gather at your gate." % [Game.day, Game.party.size()], "bad")
 	start_player_turn(true)
 
+
+## Rooms with a "garrison" field: that many of its unit stand in the room each night. They
+## fight for the night only; they aren't housed minions and nothing carries over.
+func _garrison() -> void:
+	for si in Game.slots.size():
+		var t: String = Game.slots[si].get("type", "")
+		if t == "" or not Data.ROOMS[t].has("garrison"):
+			continue
+		var n: int = Data.ROOMS[t].fx.get("garrison", 1) * Game.slots[si].lvl
+		for p in Game.slot_tiles(si):
+			if n <= 0:
+				break
+			if Game.is_open(p) and empty_tile(p) and p != Game.monster_start():
+				mk_unit("p", Data.ROOMS[t].garrison, p)
+				n -= 1
 
 func admit(n: int) -> void:
 	var F := Game.field([Game.entrance])
@@ -211,29 +273,38 @@ func bonded() -> bool:
 func move_of(u: Unit) -> int:
 	if u.root > 0:
 		return 0
-	var m: int = u.move + (Game.b.move if is_mon(u) else 0) + (1 if u.rally else 0)
+	var m: int = u.move + (Game.b.move + Game.fx("mon_move") if u.kind == "monster" else 0) + (1 if u.rally else 0) 		+ (Game.perk("sq_move") if u.kind == "squire" else 0)
+	if u.side == "p" and not is_mon(u):
+		m += Game.fx("minion_move")
 	if u.side == "h" and Game.type_at(u.pos) == "cistern":
 		m = maxi(1, m - Game.lvl("cistern"))
+	if u.side == "h":
+		m = maxi(1, m - Game.room_fx(u.pos, "here_slow"))
 	if u.slow > 0:
 		m = mini(m, 1)
 	return m
 
 func atk_of(u: Unit) -> int:
 	var bond := 1 if bonded() and is_mon(u) else 0
+	var here := Game.room_fx(u.pos, "here_power") if u.side == "p" else 0
 	if u.kind == "monster":
-		return u.atk + Game.b.atk + Game.lvl("bloodpool") * 2 + Game.lvl("brainjars") * 2 + Game.lvl("sanctum") + bond
+		return u.atk + Game.b.atk + Game.lvl("bloodpool") * 2 + Game.lvl("brainjars") * 2 + Game.lvl("sanctum") + bond + Game.fx("mon_atk") + here
 	if u.kind == "squire":
-		return u.atk + Game.b.atk + bond
+		return u.atk + Game.b.atk + bond + here + Game.perk("sq_atk")
 	if u.side == "p":
-		return u.atk + Game.b.minion + Game.lvl("armory") + (2 if u.rally else 0) + (Data.amp_dmg(Game.lvl("amplifier")) if u.thrall else 0) \
-			+ (maxi(0, Game.lvl("coven") - 1) if u.kind == "warlock" else 0)
-	return maxi(1, u.atk - (2 if u.hex > 0 else 0))
+		var kind_atk := Game.perk("skel_atk") if u.kind == "skeleton" else 0
+		if u.thrall or u.kind == "thrall":
+			kind_atk += Game.perk("thrall_atk")
+		return u.atk + kind_atk + Game.b.minion + Game.lvl("armory") + (2 if u.rally else 0) + (Data.amp_dmg(Game.lvl("amplifier")) if u.thrall else 0) \
+			+ (maxi(0, Game.lvl("coven") - 1) if u.kind == "warlock" else 0) + Game.fx("minion_atk") + here
+	return maxi(1, u.atk - (2 if u.hex > 0 else 0) - Game.room_fx(u.pos, "here_weak"))
 
-func spell_dmg(base: int) -> int:
-	return base + Game.b.spell + Game.lvl("library") * 2 + Data.well_dmg(Game.lvl("manawell"))
+## A spell's damage: base, plus spell boosts, plus perks for that spell ("<id>_dmg").
+func spell_dmg(base: int, id := "") -> int:
+	return base + (Game.perk(id + "_dmg") if id != "" else 0) + Game.b.spell + Game.lvl("library") * 2 + Data.well_dmg(Game.lvl("manawell")) + Game.fx("spell_dmg")
 
 func cd_of(sp: Dictionary) -> int:
-	var c: int = sp.cd - Game.b.cd - Game.lvl("manawell")
+	var c: int = sp.cd - Game.b.cd - Game.lvl("manawell") - Game.perk("spell_cd") - Game.perk(sp.id + "_cd")
 	if sp.id == "raise" and Game.lvl("soulcage") > 0: c -= 1
 	if sp.id == "dominate" and Game.lvl("amplifier") > 0: c -= 1
 	if bonded() and caster_of(sp) == mon: c -= 1
@@ -314,6 +385,16 @@ func walk(u: Unit, path: Array) -> void:
 		await wait(0.085)
 		if u.side == "h" and await spring_trap(u):
 			return
+		# rooms that hurt each hero the first time it walks in each night
+		if u.side == "h" and Game.slot_of(st) != Game.slot_of(from):
+			var ed := Game.room_fx(st, "enter_dmg")
+			var key := "%d:%d" % [u.id, Game.slot_of(st)]
+			if ed > 0 and not entered.has(key):
+				entered[key] = true
+				text(st, "ambushed", Data.col("#ff9a60"))
+				hurt(u, ed, TRAP, true)
+				if u.hp <= 0:
+					return
 		# heroes who wander into the Maze of Bones lose their way and stop
 		if u.side == "h" and Game.type_at(st) == "maze" and Game.type_at(from) != "maze":
 			text(st, "lost!", Data.col("#e8dcc0"))
@@ -333,6 +414,10 @@ func spring_trap(u: Unit) -> bool:
 		return false
 	var t: String = Game.traps[k]
 	sprung[k] = true
+	var th := Game.perk("trap_heal")
+	if th > 0:
+		for m in mons_alive():
+			_mend(m, th)
 	if t == "spikes":
 		text(k, "spikes!", Data.col("#e8dcc0"))
 		hurt(u, Game.trap_dmg("spikes"), TRAP)
@@ -369,6 +454,7 @@ func start_player_turn(first := false) -> void:
 		u.rally = false
 	if not first:
 		_shaman_mend()
+		_regen()
 	select(lead())
 	if first:
 		say("The first heroes are through the gate. Move, attack, or wait for them to come to you.")
@@ -377,6 +463,17 @@ func start_player_turn(first := false) -> void:
 	else:
 		say("Your turn.")
 	changed.emit()
+
+## Rooms that heal your side a little at the start of each of your turns.
+func _regen() -> void:
+	var mr := Game.fx("mon_regen")
+	var nr := Game.fx("minion_regen")
+	for u in alive("p"):
+		var amt := ((mr + (Game.perk("bond_regen") if bonded() else 0)) if is_mon(u) else nr) + int(u.arm.get("regen", 0))
+		if amt > 0 and u.hp < u.max_hp:
+			var h := mini(amt, u.max_hp - u.hp)
+			u.hp += h
+			text(u.pos, "+%d" % h, Data.col("#9be27a"))
 
 ## Spirit Lodge: every living shaman heals your units within 2 tiles, itself included.
 func _shaman_mend() -> void:
@@ -420,6 +517,7 @@ func handle_click(p: Vector2i) -> void:
 			else:
 				say("Something is in the way.", true)
 			return
+		_remember()
 		busy = true
 		s.acted = true
 		s.moved = true
@@ -435,6 +533,7 @@ func handle_click(p: Vector2i) -> void:
 		return
 	if s and reach.has(p) and not reach[p].occ and reach[p].d > 0:
 		var R := reach
+		_remember()
 		busy = true
 		reach = {}
 		await walk(s, path_to(R, p))
@@ -448,10 +547,80 @@ func handle_click(p: Vector2i) -> void:
 	if s and not (s.moved and s.acted):
 		say("%s is still selected. Click a blue tile, a hero ringed in red, or Finish this unit (F)." % s.uname)
 
+## Every script field of a unit, with dictionaries and arrays copied, so it can be put back.
+func _unit_state(u: Unit) -> Dictionary:
+	var o := {}
+	for pr in u.get_property_list():
+		if pr.usage & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			var v = u.get(pr.name)
+			o[pr.name] = v.duplicate(true) if v is Dictionary or v is Array else v
+	return o
+
+## Saves everything a player action can change, so undo() can put it back.
+func _remember() -> void:
+	var us := []
+	for u in units:
+		us.append([u, _unit_state(u)])
+	history.append({"units": us, "corpses": corpses.duplicate(true), "loot": loot, "kills": kills,
+		"stolen": stolen, "escaped": escaped, "smashed": smashed, "decor_hp": decor_hp.duplicate(),
+		"used": used.duplicate(), "queue": queue.duplicate(), "sprung": sprung.duplicate(), "revived": revived, "entered": entered.duplicate(), "raised": raised,
+		"spared": spared, "drops": drops.duplicate(), "scrolls": Game.scrolls.duplicate(true),
+		"sel": sel, "traps": Game.traps.duplicate(), "gkills": Game.kills, "souls": Game.souls,
+		"gold": Game.gold, "mhp": Game.mhp, "shp": Game.shp, "logs": Game.logs.duplicate(true)})
+
+func can_undo() -> bool:
+	return not history.is_empty() and not busy and not over
+
+## Takes back your last action this turn: a move, an attack, a spell, a room power or finishing a
+## unit. Works back one action at a time until the start of your turn. The heroes' turn clears it.
+func undo() -> void:
+	if not can_undo():
+		return
+	var s: Dictionary = history.pop_back()
+	units = []
+	for e in s.units:
+		var u: Unit = e[0]
+		for k in e[1]:
+			u.set(k, e[1][k])
+		units.append(u)
+	corpses = s.corpses
+	loot = s.loot
+	kills = s.kills
+	stolen = s.stolen
+	escaped = s.escaped
+	smashed = s.smashed
+	decor_hp = s.decor_hp
+	used = s.used
+	queue = s.queue
+	sprung = s.sprung
+	entered = s.entered
+	raised = s.raised
+	revived = s.revived
+	spared = s.spared
+	drops = s.drops
+	Game.scrolls = s.scrolls
+	_build_scrolls()
+	Game.traps = s.traps
+	Game.kills = s.gkills
+	Game.souls = s.souls
+	Game.gold = s.gold
+	Game.mhp = s.mhp
+	Game.shp = s.shp
+	Game.logs = s.logs
+	Game.logged.emit()
+	fx.clear()
+	texts.clear()
+	parts.clear()
+	shake = 0.0
+	var back: Unit = s.sel
+	select(back if back != null and back.hp > 0 and not (back.moved and back.acted) else lead())
+	say("Undone.%s" % (" %d more to undo this turn." % history.size() if history.size() > 0 else ""))
+
 ## Ends one unit's turn without it doing anything more.
 func finish_unit(u: Unit) -> void:
 	if busy or over or u == null:
 		return
+	_remember()
 	u.moved = true
 	u.acted = true
 	after_action()
@@ -579,14 +748,14 @@ func spell(id: String) -> Dictionary:
 
 ## Every spell this run's monster side has: the monster's, plus the Squire's for a duo.
 func all_specials() -> Array:
-	return Game.M.specials + (Game.M.partner.specials if Game.duo() else [])
+	return Game.M.specials + scroll_sp + (Game.M.partner.specials if Game.duo() else [])
 
 ## The spells a unit casts. Minions have none.
 func specials_of(u: Unit) -> Array:
 	if u == null:
 		return []
 	if u.kind == "monster":
-		return Game.M.specials
+		return Game.M.specials + scroll_sp
 	if u.kind == "squire":
 		return Game.M.partner.specials
 	return []
@@ -597,15 +766,15 @@ func caster_of(sp: Dictionary) -> Unit:
 func spell_tiles(sp: Dictionary) -> Array:
 	var m := caster_of(sp)
 	var o := []
-	var r: int = sp.get("range", 0)
+	var r: int = sp.get("range", 0) + Game.perk(sp.id + "_rng")
 	match sp.kind:
 		"enemy":
 			for h in alive("h"):
-				if Game.in_range(m.pos, h.pos, r) and not (sp.id == "dominate" and h.d.get("boss", false) and Game.lvl("amplifier") < 2):
+				if Game.in_range(m.pos, h.pos, r) and not (sp.id == "dominate" and h.d.get("boss", false) and Game.lvl("amplifier") < 2 and Game.perk("dominate_boss") == 0) 						and not (sp.id == "bite" and not Game.can_step(m.pos, h.pos)):
 					o.append(h.pos)
 		"ally":
 			for u in alive("p"):
-				if u != m and u.kind != "monster" and Game.in_range(m.pos, u.pos, r):
+				if u != m and u.kind != "monster" and Game.in_range(m.pos, u.pos, r) and not (sp.id == "pact" and u.kind == "squire"):
 					o.append(u.pos)
 		"adj":
 			for dv in Game.DIRS:
@@ -630,7 +799,16 @@ func spell_tiles(sp: Dictionary) -> Array:
 
 func can_cast(sp: Dictionary) -> bool:
 	var c := caster_of(sp)
-	return not busy and c != null and c.hp > 0 and not c.acted and c.cds.get(sp.id, 0) <= 0
+	return not busy and c != null and c.hp > 0 and not c.acted and c.cds.get(sp.id, 0) <= 0 \
+		and not (sp.id == "coin" and Game.gold <= 0) and not (sp.id == "rain" and Game.gold < RAIN_GOLD) 		and not (sp.has("scroll") and not _scroll_ok(sp))
+
+## A scroll spell still matches a scroll you carry (it may have crumbled since the list was made).
+func _scroll_ok(sp: Dictionary) -> bool:
+	var i: int = sp.get("slot", -1)
+	return i >= 0 and i < Game.scrolls.size() and Game.scrolls[i].id == sp.scroll and int(Game.scrolls[i].ch) > 0
+
+## Gold Golden Rain spends.
+const RAIN_GOLD := 15
 
 func arm_spell(id: String) -> void:
 	var sp := spell(id)
@@ -653,11 +831,25 @@ func arm_spell(id: String) -> void:
 	say("%s: click a highlighted tile. Pick the spell again to cancel." % sp.name)
 	changed.emit()
 
+## One spell per carried scroll, named with its charges left. Ids are "scroll0", "scroll1"...
+func _build_scrolls() -> void:
+	scroll_sp = []
+	for i in Game.scrolls.size():
+		var e: Dictionary = Game.scrolls[i]
+		var S := Data.scroll_by_id(e.id)
+		if S.is_empty() or int(e.ch) <= 0:
+			continue
+		scroll_sp.append({"id": "scroll%d" % i, "scroll": S.id, "slot": i, "name": "%s (%d)" % [S.name, e.ch], "cd": 1,
+			"kind": S.kind, "range": S.get("range", 0), "free": S.get("free", false), "desc": S.desc + " Charges left: %d." % e.ch})
+
 func cast_spell(sp: Dictionary, p: Vector2i) -> void:
 	var m := caster_of(sp)
+	if sp.has("scroll") and not _scroll_ok(sp):
+		return
 	if sp.kind != "self" and not (p in spell_tiles(sp)):
 		say("Pick one of the highlighted tiles.", true)
 		return
+	_remember()
 	busy = true
 	mode = ""
 	reach = {}
@@ -665,28 +857,90 @@ func cast_spell(sp: Dictionary, p: Vector2i) -> void:
 	if not sp.get("free", false):
 		m.acted = true
 		m.moved = true
-	await _spell_effect(sp.id, m, p)
+	if sp.has("scroll"):
+		var e: Dictionary = Game.scrolls[sp.slot]
+		e.ch = int(e.ch) - 1
+		await _scroll_effect(sp.scroll, m, p)
+		if e.ch <= 0:
+			Game.scrolls.erase(e)
+			Game.add_log("The %s crumbles to dust." % Data.scroll_by_id(sp.scroll).name)
+		_build_scrolls()
+	else:
+		await _spell_effect(sp.id, m, p)
 	await wait(0.18)
 	busy = false
 	if sp.get("free", false):
 		m.moved = true
 	after_action()
 
+func _scroll_effect(id: String, m: Unit, p: Vector2i) -> void:
+	match id:
+		"fireball", "meteor":
+			var big := id == "meteor"
+			ring(p, Data.col("#ff7a3a"), 1.8)
+			burst(p, Data.col("#ffb050"), 40 if big else 26)
+			shake = 0.3 if big else 0.15
+			for h in alive("h"):
+				if absi(h.pos.x - p.x) <= 1 and absi(h.pos.y - p.y) <= 1:
+					hurt(h, spell_dmg(18 if big else 7), m, true)
+		"lightning":
+			var t := unit_at(p)
+			line(m.pos, p, Data.col("#e8f0ff"), true)
+			if t:
+				hurt(t, spell_dmg(12), m, true)
+		"mending":
+			_mend(m, 15)
+			burst(m.pos, Data.col("#9be27a"), 16)
+		"frost":
+			var t := unit_at(p)
+			line(m.pos, p, Data.col("#a8d8ff"), true)
+			if t:
+				hurt(t, spell_dmg(4), m, true)
+				t.root = 2
+				text(t.pos, "frozen!", Data.col("#a8d8ff"))
+		"blink":
+			burst(m.pos, Data.col("#c9a7ff"), 14)
+			m.pos = p
+			m.draw_pos = Vector2(p)
+			burst(p, Data.col("#c9a7ff"), 14)
+		"terror":
+			ring(m.pos, Data.col("#c77dff"), 2.4)
+			for h in alive("h"):
+				if Game.man(m.pos, h.pos) <= 2:
+					h.conf = maxi(h.conf, 1)
+					text(h.pos, "terrified!", Data.col("#c77dff"))
+		"grave":
+			mk_unit("p", "skeleton", p)
+			text(p, "rises!", Data.col("#cfe8d8"))
+			for dv in Game.DIRS:
+				if Game.can_step(p, p + dv) and empty_tile(p + dv):
+					mk_unit("p", "skeleton", p + dv)
+					break
+		"warding":
+			m.shield += 12
+			text(m.pos, "warded", Data.col("#a8b4ff"))
+		"doom":
+			var t := unit_at(p)
+			line(m.pos, p, Data.col("#8a2040"), true)
+			if t:
+				hurt(t, maxi(1, t.hp / (4 if t.d.get("boss", false) else 2)), m, true)
+
 func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 	match id:
 		"nova":
-			ring(m.pos, Data.col("#a8d8ff"), 2.4)
+			var nr := 2 + Game.perk("nova_rng")
+			ring(m.pos, Data.col("#a8d8ff"), nr + 0.4)
 			for h in alive("h"):
-				if Game.man(m.pos, h.pos) <= 2 and Game.los(m.pos, h.pos):
-					hurt(h, spell_dmg(4), m, true)
+				if Game.man(m.pos, h.pos) <= nr and Game.los(m.pos, h.pos):
+					hurt(h, spell_dmg(4, id), m, true)
 					h.slow = 1
 			burst(m.pos, Data.col("#cfeaff"), 24)
 		"chain":
 			var cur := unit_at(p)
 			var prev := m.pos
 			var hit := {}
-			var dmg := spell_dmg(6)
-			for i in 3:
+			var dmg := spell_dmg(6, id)
+			for i in 3 + Game.perk("chain_jumps"):
 				if cur == null:
 					break
 				line(prev, cur.pos, Data.col("#bfe0ff"), true)
@@ -717,7 +971,7 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 			var s1 := mk_unit("p", "skeleton", p)
 			s1.acted = true
 			burst(p, Data.col("#e8dcc0"), 14)
-			var extra := Data.soul_skeletons(Game.lvl("soulcage")) - 1
+			var extra := Data.soul_skeletons(Game.lvl("soulcage")) - 1 + Game.perk("raise_extra")
 			for dv in Game.DIRS:
 				if extra <= 0:
 					break
@@ -739,6 +993,8 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 			var h := unit_at(p)
 			h.side = "p"
 			h.thrall = true
+			h.max_hp += Game.perk("thrall_hp")
+			h.hp += Game.perk("thrall_hp")
 			h.moved = true
 			h.acted = true
 			h.root = 0
@@ -758,8 +1014,8 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 			ring(p, Data.col("#c77dff"), 1.6)
 			for h in alive("h"):
 				if absi(h.pos.x - p.x) <= 1 and absi(h.pos.y - p.y) <= 1:
-					h.conf = 1
-					hurt(h, 2 + Game.b.spell, m, true)
+					h.conf = 1 + Game.perk("conf_turns")
+					hurt(h, 2 + Game.b.spell + Game.perk("scream_dmg"), m, true)
 					text(h.pos, "confused", Data.col("#e0b0ff"))
 			burst(p, Data.col("#c77dff"), 20)
 		"lure":
@@ -770,7 +1026,7 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 			var hs := alive("h")
 			hs.sort_custom(func(a, c): return F.get(a.pos, 99) < F.get(c.pos, 99))
 			for h in hs:
-				for s in 2:
+				for s in 2 + Game.perk("lure_steps"):
 					if h.hp <= 0:
 						break
 					var cur: int = F.get(h.pos, 99)
@@ -786,18 +1042,18 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 						break
 		"hex":
 			var h := unit_at(p)
-			h.hex = 2
+			h.hex = 2 + Game.perk("hex_turns")
 			if Game.lvl("sanctum") >= 3:
 				h.slow = 1
 			line(m.pos, p, Data.col("#7d8cff"), true)
 			text(p, "hexed", Data.col("#a8b4ff"))
 		"ward":
 			var u := unit_at(p)
-			u.shield = 6
+			u.shield = 6 + Game.perk("ward_amt")
 			ring(p, Data.col("#7d8cff"), 1.0)
 			text(p, "warded", Data.col("#a8b4ff"))
 		"challenge":
-			var r: int = 3 if Game.lvl("trainingyard") >= 2 else 2
+			var r: int = (3 if Game.lvl("trainingyard") >= 2 else 2) + Game.perk("challenge_rng")
 			ring(m.pos, Data.col("#a8aec8"), float(r) + 0.5)
 			for h in alive("h"):
 				if Game.man(h.pos, m.pos) <= r:
@@ -810,15 +1066,138 @@ func _spell_effect(id: String, m: Unit, p: Vector2i) -> void:
 				if not is_mon(u) and Game.man(u.pos, m.pos) <= 3:
 					u.rally = true
 					text(u.pos, "rallied", Data.col("#ffd070"))
-		"snap":
-			Game.traps[p] = "spikes"
-			burst(p, Data.col("#e8dcc0"), 10)
-			text(p, "click", Data.col("#e8dcc0"))
+		"siphon":
+			var t := unit_at(p)
+			line(m.pos, p, Data.col("#9be2b0"), true)
+			var before := t.hp
+			hurt(t, spell_dmg(6, id), m, true)
+			var got := mini(before - maxi(0, t.hp), m.max_hp - m.hp)
+			if got > 0:
+				m.hp += got
+				text(m.pos, "+%d" % got, Data.col("#9be27a"))
+		"blizzard":
+			ring(p, Data.col("#cfeaff"), 1.6)
+			for h in alive("h"):
+				if absi(h.pos.x - p.x) <= 1 and absi(h.pos.y - p.y) <= 1:
+					h.root = 1
+					hurt(h, spell_dmg(3, id), m, true)
+					text(h.pos, "frozen", Data.col("#cfeaff"))
+			burst(p, Data.col("#e8f6ff"), 24)
+		"bite":
+			var t := unit_at(p)
+			var before := t.hp
+			m.lunge = Vector2(p - m.pos) * 0.25
+			m.lunge_t = 0.15
+			hurt(t, atk_of(m) + 4, m)
+			# a second helping on top of the usual drink
+			var got := mini(ceili((before - maxi(0, t.hp)) / 3.0), m.max_hp - m.hp)
+			if got > 0:
+				m.hp += got
+				text(m.pos, "+%d" % got, Data.col("#ff6080"))
+			burst(p, Data.col("#e0405a"), 12)
+		"mist":
+			ring(m.pos, Data.col("#a3122c"), 2.4)
+			var caught := 0
+			for h in alive("h"):
+				if Game.man(m.pos, h.pos) <= 2:
+					caught += 1
+					hurt(h, 4 + Game.b.spell, m)
+			var heal := mini(caught * 3, m.max_hp - m.hp)
+			if heal > 0:
+				m.hp += heal
+				text(m.pos, "+%d" % heal, Data.col("#ff6080"))
+			burst(m.pos, Data.col("#a3122c"), 26)
+		"boom":
+			corpses.erase(p)
+			ring(p, Data.col("#9ad040"), 1.6)
+			for h in alive("h"):
+				if Game.man(h.pos, p) <= 1:
+					hurt(h, spell_dmg(8, id), m, true)
+			burst(p, Data.col("#9ad040"), 26)
+			shake = 0.25
+			Game.add_log("A corpse bursts in a spray of bone.")
+		"pact":
+			var u := unit_at(p)
+			burst(p, Data.col("#6fd3a0"), 18)
+			u.hp = 0
+			var heal := mini(8, m.max_hp - m.hp)
+			m.hp += heal
+			text(m.pos, "+%d" % heal, Data.col("#9be27a"))
+			for o in alive("p"):
+				if not is_mon(o) and Game.man(o.pos, p) <= 3:
+					o.rally = true
+					text(o.pos, "rallied", Data.col("#9be27a"))
+			Game.add_log("Your %s gives itself to the dark." % u.d.name.to_lower())
+		"blast":
+			var t := unit_at(p)
+			line(m.pos, p, Data.col("#c77dff"), true)
+			hurt(t, spell_dmg(6, id) * (2 if t.conf > 0 else 1), m, true)
+		"puppet":
+			var h := unit_at(p)
+			line(m.pos, p, Data.col("#e0b0ff"), true)
+			var foe: Unit = null
+			for o in alive("h"):
+				if o != h and Game.in_range(h.pos, o.pos, h.rng) and (foe == null or o.hp < foe.hp):
+					foe = o
+			if foe:
+				text(p, "puppeted", Data.col("#e0b0ff"))
+				await attack(h, foe)
+			else:
+				h.conf = 1 + Game.perk("conf_turns")
+				text(p, "confused", Data.col("#e0b0ff"))
+		"tongue":
+			var h := unit_at(p)
+			line(m.pos, p, Data.col("#ff8fa0"), false)
+			var F := Game.field([m.pos])
+			for s in 4:
+				if h.hp <= 0 or h.root > 0 or Game.man(h.pos, m.pos) <= 1:
+					break
+				var cur: int = F.get(h.pos, 99)
+				var nx = null
+				for q in Game.steps(h.pos):
+					if empty_tile(q) and F.get(q, 99) < cur:
+						nx = q
+						break
+				if nx == null:
+					break
+				await walk(h, [nx])
+			if h.hp > 0 and Game.man(h.pos, m.pos) == 1 and Game.can_step(m.pos, h.pos):
+				await attack(m, h)
+		"rain":
+			Game.gold -= RAIN_GOLD
+			ring(p, Data.col("#ffd070"), 1.6)
+			for h in alive("h"):
+				if absi(h.pos.x - p.x) <= 1 and absi(h.pos.y - p.y) <= 1:
+					hurt(h, 10 + Game.b.spell, m, true)
+			burst(p, Data.col("#ffd070"), 28)
+			text(p + Vector2i(0, -1), "-%dg" % RAIN_GOLD, Data.col("#e4a648"))
+		"rend":
+			var t := unit_at(p)
+			line(m.pos, p, Data.col("#7d8cff"), true)
+			hurt(t, spell_dmg(6, id) * (2 if t.hex > 0 else 1), m, true)
+		"cleave":
+			ring(m.pos, Data.col("#a8aec8"), 1.4)
+			for h in alive("h"):
+				if Game.man(h.pos, m.pos) == 1 and Game.can_step(m.pos, h.pos):
+					hurt(h, atk_of(m), m)
+			Game.add_log("%s sweeps his blade in a wide arc." % m.uname)
+		"coin":
+			# spend gold as damage, never more than the hero has left
+			var t := unit_at(p)
+			var amt := mini(Game.coin_cap(), mini(Game.gold, t.hp)) if t else 0
+			if amt > 0:
+				Game.gold -= amt
+				line(m.pos, p, Data.col("#e4a648"), true)
+				burst(p, Data.col("#ffd070"), 14)
+				text(p + Vector2i(0, -1), "%dg" % amt, Data.col("#e4a648"))
+				hurt(t, amt, m, true)
+				Game.add_log("You spit %d gold at %s." % [amt, t.uname])
 
 func collapse() -> void:
 	var si := Game.slot_idx("collapse")
 	if si < 0 or busy or used.has("collapse"):
 		return
+	_remember()
 	used.collapse = true
 	busy = true
 	var l := Game.lvl("collapse")
@@ -839,11 +1218,18 @@ func collapse() -> void:
 # ---------------------------------------------------------------- combat
 
 func _reward(h: Unit) -> void:
-	var g := Game.kill_gold(Game.veteran_gold(Game.day, h.d.gold))
+	var g := Game.kill_gold(Game.veteran_gold(Game.day, h.d.gold)) + Game.fx("kill_gold")
 	loot += g
 	kills += 1
 	Game.kills += 1
-	Game.souls += 6 if h.d.get("boss", false) else 1
+	Game.souls += (6 + Game.fx("boss_souls")) if h.d.get("boss", false) else 1
+	var kh := Game.fx("kill_heal")
+	if kh > 0:
+		for m in mons_alive():
+			if m.hp < m.max_hp:
+				var add := mini(kh, m.max_hp - m.hp)
+				m.hp += add
+				text(m.pos, "+%d" % add, Data.col("#ff6080"))
 	text(h.pos + Vector2i(0, -1), "+%dg" % g, Data.col("#e4a648"))
 
 func hurt(t: Unit, amt: int, src: Unit, magic := false) -> void:
@@ -855,6 +1241,10 @@ func hurt(t: Unit, amt: int, src: Unit, magic := false) -> void:
 	if t.hex > 0:
 		a += 2 + Game.lvl("sanctum")
 	var home := 1 if is_mon(t) and Game.type_at(t.pos) == "lair" else 0
+	if t.side == "h":
+		a += Game.room_fx(t.pos, "here_shred")
+	else:
+		home += Game.room_fx(t.pos, "here_def")
 	a = maxi(1, a - (0 if magic else t.armor) - home)
 	if t.shield > 0:
 		var soak := mini(t.shield, a)
@@ -871,8 +1261,8 @@ func hurt(t: Unit, amt: int, src: Unit, magic := false) -> void:
 		other.hp = mini(other.max_hp, other.hp + Data.oath_heal(Game.lvl("oathstone")))
 	t.flash = 0.15
 	text(t.pos, "-%d" % a, Data.col("#ffd0c0") if t.side == "h" else Data.col("#ff7d8f"))
-	if src and src.hp > 0 and t.side != src.side and ((src.kind == "monster" and Game.mk == "vampire") or src.d.get("leech", false)):
-		var l := ceili(a / 3.0)
+	if src and src.hp > 0 and t.side != src.side and ((src.kind == "monster" and Game.mk == "vampire") or src.d.get("leech", false) or src.wpn.get("leech", false)):
+		var l := ceili(a / (2.0 if src.kind == "monster" and Game.perk("vamp_leech") > 0 else 3.0))
 		src.hp = mini(src.max_hp, src.hp + l)
 		text(src.pos, "+%d" % l, Data.col("#ff6080"))
 	if t.hp > 0:
@@ -895,10 +1285,30 @@ func hurt(t: Unit, amt: int, src: Unit, magic := false) -> void:
 		Game.add_log("Your phylactery flares. You reform from dust.", "info")
 		changed.emit()
 		return
+	if is_mon(t) and Game.perk("cheat_death") > 0 and not spared:
+		spared = true
+		t.hp = mini(t.max_hp, Game.perk("cheat_death"))
+		burst(t.pos, Data.col("#ff6080"), 24)
+		text(t.pos, "rises!", Data.col("#ff6080"))
+		Game.add_log("Your Spare Heart beats. %s rises again." % t.uname, "info")
+		changed.emit()
+		return
 	burst(t.pos, Data.col(t.d.get("col", "#88aa66")) if t.side == "h" else Data.col("#88aa66"), 16)
 	if t.side == "h":
 		_reward(t)
 		corpses[t.pos] = true
+		if randi() % 100 < Game.drop_chance(t.d):
+			var it := Game.hero_drop(t.kind)
+			if it != "":
+				drops.append(it)
+				text(t.pos + Vector2i(0, -1), Data.ware_by_id(it).name, Data.col("#c8a070"))
+		if raised < Game.room_fx(t.pos, "raise_here"):
+			raised += 1
+			mk_unit("p", "skeleton", t.pos)
+			text(t.pos + Vector2i(0, 1), "rises!", Data.col("#cfe8d8"))
+		elif randi() % 100 < Game.perk("raise_pct"):
+			mk_unit("p", "skeleton", t.pos)
+			text(t.pos + Vector2i(0, 1), "rises!", Data.col("#cfe8d8"))
 		if t.stole > 0:
 			Game.gold += t.stole
 			stolen -= t.stole
@@ -922,6 +1332,13 @@ func hurt(t: Unit, amt: int, src: Unit, magic := false) -> void:
 		Game.add_log("Your %s is cut down. It will not come back." % (("thrall " + t.uname) if t.thrall else t.d.name.to_lower()), "bad")
 	changed.emit()
 
+## Heals a unit by up to n and shows it.
+func _mend(u: Unit, n: int) -> void:
+	var add := mini(n, u.max_hp - u.hp)
+	if add > 0 and u.hp > 0:
+		u.hp += add
+		text(u.pos, "+%d" % add, Data.col("#9be27a"))
+
 func attack(a: Unit, t: Unit) -> void:
 	var c := Data.col(Game.M.col) if a.kind == "monster" else Data.col(Game.M.partner.col) if a.kind == "squire" else (Data.col("#c77dff") if a.d.get("magic", false) else Data.col("#d8f0a0") if a.side == "p" else (Data.col("#ff9a40") if a.d.get("splash", false) else Color.WHITE))
 	line(a.pos, t.pos, c, a.rng > 1)
@@ -930,8 +1347,15 @@ func attack(a: Unit, t: Unit) -> void:
 	await wait(0.11)
 	var dmg := atk_of(a)
 	# Doombolt and warlock bolts ignore armor
-	hurt(t, dmg, a, (a.kind == "monster" and Game.mk == "darklord") or a.d.get("magic", false))
-	if a.d.get("splash", false):
+	hurt(t, dmg, a, (a.kind == "monster" and Game.mk == "darklord") or a.d.get("magic", false) or a.wpn.get("pierce", false))
+	if a.wpn.get("slow", false) and t.hp > 0:
+		t.slow = 1
+	var thorns: int = (Game.perk("thorns") if is_mon(t) else 0) + int(t.arm.get("thorns", 0))
+	if a.side == "h" and t.side == "p" and a.hp > 0 and thorns > 0 and Game.man(a.pos, t.pos) <= 1:
+		hurt(a, thorns, t, true)
+	if a.side == "p" and not is_mon(a) and a.d.get("undead", false) and Game.perk("undead_slow") > 0 and t.hp > 0:
+		t.slow = 1
+	if a.d.get("splash", false) or a.wpn.get("splash", false):
 		ring(t.pos, Data.col("#ff9a40"), 1.2)
 		for o in units.duplicate():
 			if o != t and o.hp > 0 and o.side != a.side and Game.man(o.pos, t.pos) == 1:
@@ -944,6 +1368,7 @@ func attack(a: Unit, t: Unit) -> void:
 func enemy_turn() -> void:
 	if busy or over:
 		return
+	history = []
 	busy = true
 	sel = null
 	reach = {}
@@ -979,6 +1404,12 @@ func hero_act(h: Unit) -> void:
 
 func hero_turn(h: Unit) -> void:
 	var D := h.d
+	var sear := Game.room_fx(h.pos, "here_dmg")
+	if sear > 0:
+		text(h.pos, "seared", Data.col("#ff9a60"))
+		hurt(h, sear, TRAP, true)
+		if h.hp <= 0:
+			return
 	if Game.type_at(h.pos) == "torture":
 		text(h.pos, "tortured", Data.col("#ff8090"))
 		hurt(h, 2 + Game.lvl("torture"), TRAP, true)
@@ -1219,12 +1650,12 @@ func approach(h: Unit, F: Dictionary, target: Unit, r: int) -> void:
 
 # ---------------------------------------------------------------- results
 
-## Applies a won night to the run and returns a summary for the boon screen.
+## Applies a won night to the run and returns a summary for the after-battle screen.
 func resolve_win() -> Dictionary:
 	# a fallen duo member stays down until bought back with souls
-	Game.mhp = maxi(1, mon.hp) if mon.hp > 0 or squire == null else 0
+	Game.mhp = mini(Game.mmax, maxi(1, mon.hp)) if mon.hp > 0 or squire == null else 0
 	if squire != null:
-		Game.shp = squire.hp
+		Game.shp = mini(Game.smax, squire.hp)
 		for e in [["lord", mon], ["squire", squire]]:
 			if e[1].hp <= 0 and not e[0] in Game.down:
 				Game.down.append(e[0])
@@ -1237,8 +1668,23 @@ func resolve_win() -> Dictionary:
 				alive_now = true
 		if not alive_now:
 			lost.append(m)
+	var lost_gear := []
 	for m in lost:
+		if not m.free:
+			continue   # a room's own minion is back at dawn, on its post and with its gear
 		Game.minions.erase(m)
+		for k in m.get("gear", {}):
+			if str(m.gear[k]) != "":
+				lost_gear.append(Data.gear_by_id(m.gear[k]).name)
+	if lost_gear.size() > 0:
+		Game.add_log("Lost with your fallen minions: %s." % ", ".join(lost_gear), "bad")
+	Game._recalc()
+	var found := []
+	for it in drops:
+		Game.add_item(it)
+		found.append(Data.ware_by_id(it).name)
+	if found.size() > 0:
+		Game.add_log("You strip the dead: %s." % ", ".join(found), "info")
 	Game.meta.best = maxi(Game.meta.best, Game.day)
 	Game.save_meta()
 	if smashed > 0:
@@ -1246,7 +1692,7 @@ func resolve_win() -> Dictionary:
 	Game.add_log("Night %d survived. You loot %d gold.%s%s" % [Game.day, loot,
 		(" %d minion%s lost." % [lost.size(), "s" if lost.size() > 1 else ""]) if lost.size() > 0 else "",
 		(" %d thief escaped." % escaped) if escaped > 0 else ""], "info")
-	return {"kills": kills, "loot": loot, "stolen": stolen, "lost": lost.size()}
+	return {"kills": kills, "loot": loot, "stolen": stolen, "lost": lost.size(), "found": found}
 
 
 # ---------------------------------------------------------------- effects

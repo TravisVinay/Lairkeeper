@@ -21,8 +21,10 @@ var BW := SW * RS             # tile columns
 var BH := SH * RS             # tile rows
 ## Nights between boss nights; Restless Crusade makes it 4. See boss_every().
 const BOSS_EVERY := 5
-## A dark boon is earned every this many nights survived (not tied to Restless Crusade).
-const BOON_EVERY := 5
+## The patron offers a gift after night 1, then every this many nights (8, 15, 22...).
+const GIFT_EVERY := 7
+## The wandering trader visits every this many days (day 3, 6, 9...).
+const TRADER_EVERY := 3
 ## Surviving this night wins the run.
 const WIN_NIGHT := 50
 ## Rooms top out at this level.
@@ -36,9 +38,25 @@ var meta_path := "user://meta.json"
 var run_path := "user://run.save"
 ## Everything a run needs to resume. Layout and furniture are rebuilt from slots.
 const RUN_KEYS := ["mk", "day", "hours", "gold", "mhp", "mmax", "souls", "kills", "logs", "taken", "b",
-	"slots", "traps", "minions", "entrance", "party", "_uid", "tut", "mods", "future", "shp", "smax", "down", "SW", "SH", "bosses"]
+	"slots", "traps", "minions", "entrance", "party", "_uid", "tut", "mods", "future", "shp", "smax", "down", "SW", "SH", "bosses", "seen", "kit",
+	"gifts", "trader", "gear", "stash", "scrolls"]
 
-var meta := {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
+## Souls once spent unlocking rooms, by room. Rooms are free now: the souls are refunded on load.
+const ROOM_REFUNDS := {
+	"stitching": 35, "guardpost": 30, "houndyard": 40, "ogrepen": 55, "belfry": 45, "ossuary": 40, "boneforge": 40, "spikehall": 25,
+	"whetstone": 30, "netloft": 25, "powderroom": 40, "bonepit": 20, "furnace": 30, "icecave": 30, "mudpit": 20, "rustroom": 40,
+	"darkhall": 35, "rookery": 25, "pitofteeth": 55, "gallery": 35, "shieldwall": 30, "bulwark": 30, "bloodaltar": 35, "chapel": 40,
+	"traininpit": 30, "infirmary": 30, "wardens": 40, "ghoulpit": 45, "goldvault": 30, "tithehall": 35, "kitchen": 20, "pantry": 25,
+	"soullantern": 40, "frostvault": 45, "parlor": 40, "plaguepit": 45, "dreampool": 40, "nervegarden": 45, "banner": 40, "pulpit": 45,
+	"kennel": 30, "lodge": 30, "armory": 25, "cistern": 25, "torture": 35, "collapse": 40, "trainingyard": 35, "oathstone": 45,
+	"maze": 30, "shrine": 35, "scrying": 40, "ogreden": 40, "manawell": 40, "phylactery": 55, "bloodpool": 35, "coffin": 30,
+	"soulcage": 45, "brainjars": 35, "amplifier": 50, "clockwork": 35, "runes": 45, "spikefoundry": 35, "snarewarren": 30, "runekiln": 45,
+	"trapvault": 45, "trapstudy": 50, "mistchamber": 30, "acidvats": 35, "gibbet": 20, "gauntlet": 35, "echohall": 30, "warroom": 35,
+	"bastion": 40, "heart": 35, "feasthall": 40, "bonearmorer": 55, "stables": 50, "hotsprings": 35, "scriptorium": 30, "drillyard": 35,
+	"smithy": 45, "messhall": 20, "countinghouse": 25, "trophyhall": 40, "charnel": 40, "toothvault": 45,
+}
+
+var meta := {"souls": 0, "hoard": 0, "best": 0, "rooms": [], "mons": {}}
 ## The Dread modifiers this run was started with (ids from Data.MODS).
 var mods := []
 ## Skips animation waits and saving. The headless tests turn this on.
@@ -65,20 +83,32 @@ var taken := []
 var b := {}
 var slots := []
 var traps := {}      # Vector2i -> trap type
-var minions := []    # {mid, kind, home, post, free}
+var minions := []    # {mid, kind, home, post, free, gear: {weapon, armor, relic}}
 var obj := {}        # Vector2i -> {kind, block}
 var entrance := Vector2i(SW / 2 * RS + 2, 0)
 ## Boss nights survived. Each one earns one expansion of the dungeon.
 var bosses := 0
+## Room types built at some point this run, so each counts once per run in meta.room_stats.
+var seen := []
+## The perks and spell loadout this run started with: {"perks": [ids], "load": [spell ids]}.
+var kit := {}
+var gifts := []      # ids of the patron gifts taken this run
+var trader := {}     # {"day", "stock": [{"id", "sold"}], "haggles"} while the trader is in
+var gear := {}       # "monster" / "squire" -> {"weapon", "armor", "relic"} ids
+var stash := []      # weapons, armor and relics in the armory, not carried by anyone
+var scrolls := []    # {"id", "ch"}: scrolls on your spell bar and the charges they have left
+## Every perk, gift and relic effect of this run, summed by key. See perk().
+var bonus := {}
 var party := []
 var future := []     # the raiders of the next nights, so the Scrying Pool can show them
 var sel := -1
 var sel_minion = null
 var trap_mode := ""
 var ent_mode := false
-## "minions" or "furniture" while the player is rearranging the dungeon, else "".
+## "minions", "furniture" or "traps" while the player is rearranging the dungeon, else "".
 var arrange := ""
 var decor_pick = null     # tile of the furniture piece picked up, or null
+var trap_pick = null      # tile of the trap picked up while arranging traps, or null
 var _uid := 0
 ## The tutorial step this run is on, or -1 for a normal run. Saved with the run.
 var tut := -1
@@ -110,11 +140,14 @@ func load_meta() -> void:
 	var d = JSON.parse_string(f.get_as_text())
 	if d is Dictionary:
 		for k in d:
-			meta[k] = d[k] if d[k] is Array else int(d[k])
-	# the Stitching Room was removed when minions became free; give back what it cost
-	if "stitching" in meta.rooms:
-		meta.rooms.erase("stitching")
-		meta.souls += 35
+			meta[k] = d[k] if d[k] is Array or d[k] is Dictionary else int(d[k])
+	# rooms no longer cost souls: give back everything ever spent unlocking them
+	var refund := 0
+	for t in meta.get("rooms", []):
+		refund += ROOM_REFUNDS.get(t, 0)
+	meta.rooms = []
+	if refund > 0:
+		meta.souls += refund
 		save_meta()
 
 
@@ -128,7 +161,7 @@ func save_meta() -> void:
 
 ## Wipes souls, unlocks and any run in progress.
 func reset_meta() -> void:
-	meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": []}
+	meta = {"souls": 0, "hoard": 0, "best": 0, "rooms": [], "mons": {}}
 	save_meta()
 	clear_run()
 
@@ -177,13 +210,21 @@ func load_run() -> bool:
 	smax = 0
 	down = []
 	bosses = 0
+	seen = []
+	kit = {}
+	gifts = []
+	trader = {}
+	gear = {}
+	stash = []
+	scrolls = []
 	SW = START_SIDE
 	SH = START_SIDE
 	for k in RUN_KEYS:
 		if d.has(k):
 			set(k, d[k])
 	_set_dims(SW, SH)
-	M = Data.MONSTERS[mk]
+	M = _kit_monster()
+	_recalc()
 	for i in slots.size():
 		if not Data.ROOMS.has(slots[i].get("type", "lair")):
 			slots[i] = {"state": "dug"}   # a room type that no longer exists
@@ -202,17 +243,25 @@ func clear_run() -> void:
 
 # ---------------------------------------------------------------- run setup
 
-func new_run(key: String, with_mods := []) -> void:
+## base_kit starts with no perks and the starting spells (the tutorial uses it).
+func new_run(key: String, with_mods := [], base_kit := false) -> void:
 	mk = key
-	M = Data.MONSTERS[key]
+	kit = {"perks": [], "load": []} if base_kit else {"perks": perks_of(key), "load": loadout(key, "") + loadout(key, "squire")}
+	M = _kit_monster()
+	gifts = []
+	trader = {}
+	gear = {}
+	stash = []
+	scrolls = []
+	_recalc()
 	mods = with_mods.duplicate()
 	day = 1
 	gold = 70 + meta.hoard * 20
-	mmax = roundi(M.hp * 0.75) if has_mod("glass") else M.hp
+	mmax = maxi(1, (roundi(M.hp * 0.75) if has_mod("glass") else M.hp) + perk("mon_hp"))
 	mhp = mmax
 	smax = 0
 	if duo():
-		smax = roundi(M.partner.hp * 0.75) if has_mod("glass") else M.partner.hp
+		smax = (roundi(M.partner.hp * 0.75) if has_mod("glass") else M.partner.hp) + perk("sq_hp")
 	shp = smax
 	down = []
 	souls = 0
@@ -223,6 +272,7 @@ func new_run(key: String, with_mods := []) -> void:
 	hours = day_hours()
 	_set_dims(START_SIDE, START_SIDE)
 	bosses = 0
+	seen = []
 	slots = []
 	for i in SW * SH:
 		slots.append({"state": "rock"})
@@ -261,7 +311,7 @@ static func soul_mult_of(ids: Array) -> float:
 	return m
 
 func soul_mult() -> float:
-	return soul_mult_of(mods)
+	return soul_mult_of(mods) + perk("soul_pct") / 100.0
 
 func boss_every() -> int:
 	return 4 if has_mod("crusade") else BOSS_EVERY
@@ -273,8 +323,13 @@ func day_hours() -> int:
 	return (2 if has_mod("short") else 3) + (b.hours if b.has("hours") else 0)
 
 ## Gold a hero drops when killed, after Greed and Lean Coffers.
+## Heroes drop KILL_GOLD of their listed gold (a little less than they used to).
+const KILL_GOLD := 0.8
+## Gold the frightened villagers leave every dawn (half with Lean Coffers).
+const TRIBUTE := 8
+
 func kill_gold(base: int) -> int:
-	var g := roundi(base * (1 + b.greed))
+	var g := maxi(1, roundi(base * KILL_GOLD * (1 + b.greed)))
 	return maxi(1, g / 2) if has_mod("lean") else g
 
 
@@ -365,8 +420,28 @@ func make_party(d: int) -> Array:
 	if is_boss_night(d): list[0] = "paladin"
 	if is_boss_night(d) and d % (boss_every() * 2) == 0 and list.size() > 1: list[1] = "paladin"
 	if has_mod("crowded"): list.append(pick_hero(d))
+	for i in perk("extra_hero"):
+		list.append(pick_hero(d))
 	return list
 
+
+## The total of one room effect across the dungeon, plus the same effect from the run's perks: each built room with that key in its "fx"
+## adds its value times its level. Rooms built from shared effects use this (see Data.ROOMS).
+func fx(key: String) -> int:
+	var n := 0
+	for s in slots:
+		var t: String = s.get("type", "")
+		if t != "":
+			n += Data.ROOMS[t].get("fx", {}).get(key, 0) * s.lvl
+	return n + perk(key)
+
+## A room effect that only counts inside one room: the room tile p is in.
+func room_fx(p: Vector2i, key: String) -> int:
+	if not in_b(p):
+		return 0
+	var s: Dictionary = slots[slot_of(p)]
+	var t: String = s.get("type", "")
+	return Data.ROOMS[t].get("fx", {}).get(key, 0) * s.lvl if t != "" else 0
 
 ## Level of a room type in the dungeon (0 if it isn't built).
 func lvl(t: String) -> int:
@@ -599,7 +674,7 @@ func open_spot(si: int) -> bool:
 
 func spend(g: int, h := 1) -> bool:
 	if hours < h:
-		tip("No hours left today. Let night fall.", true)
+		tip("No hours left today. Let night fall." if hours <= 0 else "That takes %d hours, and you have %d left today." % [h, hours], true)
 		return false
 	if gold < g:
 		tip("You need %d gold." % g, true)
@@ -611,42 +686,172 @@ func spend(g: int, h := 1) -> bool:
 func _layout_changed() -> void:
 	rebuild_objs()
 	fill_rooms()
+	_trim_traps()
 	fix_posts()
 	changed.emit()
 
-## Starter rooms are always open; the rest must be unlocked with souls between runs.
-func is_unlocked(t: String) -> bool:
-	return not Data.ROOMS[t].has("unlock") or t in meta.rooms
-
-func unlock_room(t: String) -> bool:
-	var c: int = Data.ROOMS[t].get("unlock", 0)
-	if is_unlocked(t) or meta.souls < c:
-		return false
-	meta.souls -= c
-	meta.rooms.append(t)
-	save_meta()
+## Every room is open from the first run (rooms used to be unlocked with souls).
+func is_unlocked(_t: String) -> bool:
 	return true
-
-## Rooms this monster could still unlock.
-func locked_rooms_for(key: String) -> Array:
-	var o := []
-	for t in Data.ROOMS:
-		var R: Dictionary = Data.ROOMS[t]
-		if not is_unlocked(t) and (not R.has("owner") or R.owner == key):
-			o.append(t)
-	return o
 
 ## Each room type can be built once.
 func can_build(t: String, si: int) -> bool:
 	var R: Dictionary = Data.ROOMS[t]
-	if R.get("fixed", false) or (R.has("owner") and R.owner != mk) or not is_unlocked(t):
+	if R.get("fixed", false) or (R.has("owner") and R.owner != mk):
 		return false
 	return type_count(t) == 0
+
+# ---------------------------------------------------------------- monster levels
+# Souls level a monster up between runs (see Data.LEVEL_TRACK). Saved in meta.mons:
+# {key: {"lvl": int, "picks": {"2": 0 or 1, ...}, "load": [spell ids]}}.
+
+func _mon_rec(k: String) -> Dictionary:
+	if not meta.has("mons") or not meta.mons is Dictionary:
+		meta.mons = {}
+	if not meta.mons.has(k):
+		meta.mons[k] = {"lvl": 1, "picks": {}, "load": []}
+	return meta.mons[k]
+
+## The dev switch in Settings treats every monster as fully levelled.
+func mon_lvl(k: String) -> int:
+	if Settings.dev_unlock_all and not fast:
+		return Data.MON_MAX_LVL
+	return int(_mon_rec(k).get("lvl", 1))
+
+func level_cost(k: String) -> int:
+	return Data.mon_level_cost(mon_lvl(k))
+
+func can_level(k: String) -> bool:
+	return mon_lvl(k) < Data.MON_MAX_LVL and meta.souls >= level_cost(k)
+
+func level_up(k: String) -> bool:
+	if not can_level(k):
+		return false
+	meta.souls -= level_cost(k)
+	var r := _mon_rec(k)
+	r.lvl = mon_lvl(k) + 1
+	# a new spell joins the loadout if there's a free slot for it
+	for sp in Data.SPELL_POOL.get(k, []):
+		if int(sp.lvl) == r.lvl:
+			var who: String = sp.get("who", "")
+			if loadout(k, who).size() < load_slots(k):
+				r.load = loadout(k, "") + loadout(k, "squire") + [sp.id]
+	save_meta()
+	return true
+
+## Perk picked at a perk level: 0 or 1, or -1 while the level isn't reached. Defaults to the first.
+func perk_pick(k: String, at: int) -> int:
+	if mon_lvl(k) < at:
+		return -1
+	return int(_mon_rec(k).get("picks", {}).get(str(at), 0))
+
+func set_perk(k: String, at: int, i: int) -> void:
+	var r := _mon_rec(k)
+	if not r.has("picks") or not r.picks is Dictionary:
+		r.picks = {}
+	r.picks[str(at)] = i
+	save_meta()
+
+## Perk ids a monster has picked, in level order.
+func perks_of(k: String) -> Array:
+	var o := []
+	for i in Data.PERK_LEVELS.size():
+		var p := perk_pick(k, Data.PERK_LEVELS[i])
+		if p >= 0:
+			o.append(Data.PERKS[k][i][p].id)
+	return o
+
+## Spells a unit carries into a run: 2, or 3 from level 5. Per unit for the duo.
+func load_slots(k: String) -> int:
+	return 3 if mon_lvl(k) >= 5 else 2
+
+## Spells this monster (or its Squire) has learned so far.
+func known_spells(k: String, who := "") -> Array:
+	var o := []
+	for sp in Data.spells_of(k, who):
+		if int(sp.get("lvl", 1)) <= mon_lvl(k):
+			o.append(sp)
+	return o
+
+## Spell ids picked for a unit, kept to what it knows and has slots for, starting spells
+## filling any empty slots.
+func loadout(k: String, who := "") -> Array:
+	var known := []
+	for sp in known_spells(k, who):
+		known.append(sp.id)
+	var o := []
+	for id in _mon_rec(k).get("load", []):
+		if id in known and not id in o and o.size() < load_slots(k):
+			o.append(id)
+	for id in known:
+		if o.size() >= load_slots(k) or o.size() >= known.size():
+			break
+		if not id in o:
+			o.append(id)
+	return o
+
+## Bring a spell along. The loadout is always full, so it takes the place of the oldest pick.
+func equip_spell(k: String, who: String, id: String) -> void:
+	var mine := loadout(k, who)
+	if id in mine:
+		return
+	if mine.size() >= load_slots(k):
+		mine.pop_front()
+	mine.append(id)
+	_mon_rec(k).load = mine + loadout(k, "squire" if who == "" else "")
+	save_meta()
+
+
+# ---------------------------------------------------------------- the run's kit
+# The perks and spells picked when a run starts. Saved with the run, so changing them on the
+# monster screen only affects the next run.
+
+## Total of one effect from this run's perks, patron gifts and carried relics.
+func perk(key: String) -> int:
+	return bonus.get(key, 0)
+
+## Re-sums bonus. Call whenever the kit, gifts or carried relics change.
+func _recalc() -> void:
+	bonus = {}
+	var srcs := []
+	for id in kit.get("perks", []):
+		srcs.append(Data.perk_by_id(id))
+	for id in gifts:
+		srcs.append(Data.gift_by_id(id))
+	for id in carried_relics():
+		srcs.append(Data.relic_by_id(id))
+	for o in srcs:
+		var f: Dictionary = o.get("fx", {})
+		for k in f:
+			bonus[k] = bonus.get(k, 0) + int(f[k])
+
+func has_perk(id: String) -> bool:
+	return id in kit.get("perks", [])
+
+## This run's monster: the data entry with its spells swapped for the loadout.
+func _kit_monster() -> Dictionary:
+	var m: Dictionary = Data.MONSTERS[mk].duplicate(true)
+	var load: Array = kit.get("load", [])
+	if load.is_empty():
+		return m
+	m.specials = _pick_spells(Data.spells_of(mk, ""), load)
+	if m.has("partner"):
+		m.partner.specials = _pick_spells(Data.spells_of(mk, "squire"), load)
+	return m
+
+func _pick_spells(all: Array, ids: Array) -> Array:
+	var o := []
+	for sp in all:
+		if sp.id in ids:
+			o.append(sp)
+	return o if not o.is_empty() else [all[0]]
 
 func build(si: int, t: String) -> void:
 	if not open_spot(si) or not can_build(t, si) or not guard("build:%d:%s" % [si, t]) or not spend(Data.ROOMS[t].cost[0]):
 		return
 	slots[si] = {"state": "built", "type": t, "lvl": 1}
+	_hp_fx(t, 1)
+	_note_built(t)
 	if t == "coffin":
 		mmax += 8
 		mhp += 8
@@ -656,15 +861,46 @@ func build(si: int, t: String) -> void:
 	add_log("You build a %s." % Data.ROOMS[t].name)
 	_layout_changed()
 
+## Rooms with "mon_hp" raise your max HP by their value for each level gained (or lose it).
+func _hp_fx(t: String, levels: int) -> void:
+	var v: int = Data.ROOMS[t].get("fx", {}).get("mon_hp", 0) * levels
+	if v == 0:
+		return
+	mmax += v
+	mhp = clampi(mhp + v, 1, mmax) if v > 0 else mini(mhp, mmax)
+
+## Room usage across all runs, for deciding which rooms earn their place: for each room type,
+## [runs it was built in, nights it stood through]. Kept in meta.room_stats.
+func _note_built(t: String) -> void:
+	if t in seen:
+		return
+	seen.append(t)
+	var rs: Dictionary = meta.get("room_stats", {})
+	var e: Array = rs.get(t, [0, 0])
+	rs[t] = [int(e[0]) + 1, int(e[1])]
+	meta.room_stats = rs
+
+func _note_nights() -> void:
+	var rs: Dictionary = meta.get("room_stats", {})
+	for s in slots:
+		var t: String = s.get("type", "")
+		if t != "" and t != "lair":
+			var e: Array = rs.get(t, [1, 0])
+			rs[t] = [int(e[0]), int(e[1]) + 1]
+	meta.room_stats = rs
+	save_meta()
+
 func upgrade(si: int) -> void:
 	var s: Dictionary = slots[si]
 	var R: Dictionary = Data.ROOMS[s.type]
 	if s.lvl >= MAX_LVL:
 		tip("The %s is already at its highest level." % R.name, true)
 		return
-	if not guard("upgrade:%d" % si) or not spend(Data.room_cost(s.type, s.lvl)):
+	# an upgrade takes as many hours as the level it reaches: 2 for level 2, 3 for level 3
+	if not guard("upgrade:%d" % si) or not spend(Data.room_cost(s.type, s.lvl), upgrade_hours(si)):
 		return
 	s.lvl += 1
+	_hp_fx(s.type, 1)
 	var moved_in := fill_rooms()
 	if s.type == "scrying":
 		_fill_future()
@@ -680,15 +916,26 @@ func upgrade(si: int) -> void:
 		(" %d more %s move in." % [moved_in, Data.UNITS[R.recruit].name.to_lower()]) if moved_in > 0 else ""])
 	changed.emit()
 
+## Hours to raise a room one level: the level it reaches.
+func upgrade_hours(si: int) -> int:
+	return int(slots[si].get("lvl", 0)) + 1
+
 func demolish(si: int) -> void:
 	var s: Dictionary = slots[si]
 	if Data.ROOMS[s.type].get("fixed", false) or not guard("demolish"):
 		return
 	if not spend(0):
 		return
-	# the room's own minions leave with it
+	# the room's own minions leave with it, and leave their weapons behind
+	for m in minions:
+		if m.home == si and not m.free:
+			for k in m.get("gear", {}):
+				if m.gear[k] != "":
+					stash.append(m.gear[k])
 	minions = minions.filter(func(m): return m.home != si or m.free)
+	_recalc()
 	add_log("You tear down the %s." % Data.ROOMS[s.type].name)
+	_hp_fx(s.type, -s.lvl)
 	if s.type == "coffin":
 		mmax -= 8 * s.lvl
 		mhp = mini(mhp, mmax)
@@ -822,27 +1069,72 @@ func trap_cost(t: String) -> int:
 	var c: int = Data.TRAPS[t].cost
 	return ceili(c / 2.0) if mk == "mimic" else c
 
-func trap_unlocked(t: String) -> bool:
-	var w := lvl("workshop")
+## Slots for one trap type, from the room that makes it (and any room that adds more).
+## Spike Workshop: 3/5/7 spikes. Snare Den: 2/3/4 snares. Rune Chamber: 1/2/3 runes.
+func trap_slots(t: String) -> int:
 	match t:
-		"spikes": return w >= 1 or mk == "mimic"
-		"snare": return w >= 2 or lvl("snareden") > 0
-	return w >= 3 or lvl("runes") > 0
+		"spikes":
+			var w := lvl("workshop")
+			return (1 + 2 * w if w > 0 else 0) + fx("spike_slots")
+		"snare":
+			var s := lvl("snareden")
+			return (1 + s if s > 0 else 0) + fx("snare_slots")
+	return lvl("runes") + fx("rune_slots")
 
+## Wildcard slots take any trap type. The Mimic starts with 5.
+func wild_slots() -> int:
+	return (5 if mk == "mimic" else 0) + fx("wild_slots")
+
+func trap_count(t: String) -> int:
+	var n := 0
+	for k in traps:
+		if traps[k] == t:
+			n += 1
+	return n
+
+## Wildcard slots in use: every trap past its own type's slots takes one.
+func wild_used() -> int:
+	var n := 0
+	for t in Data.TRAPS:
+		n += maxi(0, trap_count(t) - trap_slots(t))
+	return n
+
+func can_place(t: String) -> bool:
+	return trap_count(t) < trap_slots(t) or wild_used() < wild_slots()
+
+func trap_unlocked(t: String) -> bool:
+	return trap_slots(t) > 0 or wild_slots() > 0
+
+## Every trap slot, of every type plus wildcards.
 func trap_cap() -> int:
-	var w := lvl("workshop")
-	var c := (3 + w * 3) if w > 0 else 0
-	if mk == "mimic":
-		c += 6 + lvl("snareden") * 3 + lvl("runes") * 2
+	var c := wild_slots()
+	for t in Data.TRAPS:
+		c += trap_slots(t)
 	return c
+
+## After a trap room comes down, pull up the traps that no longer have a slot (half refunded).
+func _trim_traps() -> void:
+	while wild_used() > wild_slots():
+		for t in Data.TRAPS:
+			if trap_count(t) > trap_slots(t):
+				for k in traps.keys():
+					if traps[k] == t:
+						gold += trap_cost(t) / 2
+						traps.erase(k)
+						break
+				break
+
+## Most gold the Mimic's Coin Shot can spend.
+func coin_cap() -> int:
+	return 20 + fx("coin_cap")
 
 ## Traps fire once a night, so each hit is a big one.
 func trap_dmg(t: String) -> int:
-	var cw: int = lvl("clockwork") * 4 + b.trap
+	var cw: int = lvl("clockwork") * 4 + b.trap + fx("trap_dmg")
 	match t:
-		"spikes": return 8 + 4 * maxi(1, lvl("workshop")) + cw
-		"snare": return 6 + cw
-	return Data.rune_dmg(lvl("runes")) + cw
+		"spikes": return 8 + 4 * maxi(1, lvl("workshop")) + cw + fx("spike_dmg")
+		"snare": return 6 + cw + fx("snare_dmg")
+	return Data.rune_dmg(lvl("runes")) + cw + fx("rune_dmg")
 
 func place_trap(p: Vector2i) -> void:
 	if not guard("trap"):
@@ -858,8 +1150,9 @@ func place_trap(p: Vector2i) -> void:
 	if p == entrance:
 		tip("The heroes would spot a trap right in the doorway.", true)
 		return
-	if traps.size() >= trap_cap():
-		tip("You have room for %d traps. Upgrade your trap rooms for more." % trap_cap(), true)
+	if not can_place(trap_mode):
+		var nm: String = Data.TRAPS[trap_mode].name.to_lower()
+		tip("No free %s slots. Build or upgrade the room that makes them%s." % [nm, " (your wildcard slots are full too)" if wild_slots() > 0 else ""], true)
 		return
 	var c := trap_cost(trap_mode)
 	if gold < c:
@@ -993,6 +1286,9 @@ func day_click(p: Vector2i) -> void:
 	if arrange == "furniture":
 		decor_click(p)
 		return
+	if arrange == "traps":
+		trap_click(p)
+		return
 	if sel_minion != null:
 		var m = sel_minion
 		sel_minion = null
@@ -1027,6 +1323,7 @@ func clear_modes() -> void:
 	ent_mode = false
 	arrange = ""
 	decor_pick = null
+	trap_pick = null
 	sel_minion = null
 
 ## A piece of furniture, in any built room, that can be picked up.
@@ -1040,21 +1337,42 @@ func decor_spot_ok(p: Vector2i) -> bool:
 		and not traps.has(p) and p != entrance and p != monster_start() and not (duo() and p == squire_start()) \
 		and minion_at(p) == null
 
-## Turns "minions" or "furniture" arranging on, or off if it was already on.
+## Turns "minions", "furniture" or "traps" arranging on, or off if it was already on.
 func toggle_arrange(mode: String) -> void:
 	var was := arrange
 	clear_modes()
 	if was == mode:
 		changed.emit()
 		return
-	if mode == "furniture" and not guard("decor"):
+	if (mode == "furniture" and not guard("decor")) or (mode == "traps" and not guard("trap")):
 		changed.emit()
 		return
 	arrange = mode
 	if mode == "furniture":
 		tip("Click any piece of furniture to pick it up, then an empty tile in any room to set it down.")
+	elif mode == "traps":
+		tip("Click a trap to pick it up, then an open tile to set it down. Free, no hours.")
 	else:
 		tip("Click a minion, then an open tile for its new guard post.")
+	changed.emit()
+
+## An open tile a trap can be moved to: not furniture, the entrance or another trap.
+func trap_spot_ok(p: Vector2i) -> bool:
+	return arrange == "traps" and is_open(p) and p != entrance and not traps.has(p)
+
+## Arranging traps: pick one up, then set it down somewhere else, for free.
+func trap_click(p: Vector2i) -> void:
+	if traps.has(p):
+		trap_pick = null if trap_pick == p else p
+	elif trap_pick != null:
+		if trap_spot_ok(p):
+			traps[p] = traps[trap_pick]
+			traps.erase(trap_pick)
+			trap_pick = null
+		else:
+			tip("Traps go on open floor, not on furniture or the entrance.", true)
+	else:
+		tip("Click one of your traps to pick it up.", true)
 	changed.emit()
 
 func decor_click(p: Vector2i) -> void:
@@ -1110,25 +1428,41 @@ func repair_room(si: int) -> void:
 	add_log("Your servants rebuild the smashed furniture in the %s." % Data.ROOMS[slots[si].type].name)
 	_layout_changed()
 
+## Mason's Mortar: every smashed piece is mended, free.
+func _mend_all() -> void:
+	for si in slots.size():
+		if broken_count(si) > 0:
+			for e in room_objs(si):
+				e[4] = false
+	_layout_changed()
 
-# ---------------------------------------------------------------- boons and dawn
 
-## Whether surviving night d earns a dark boon.
-func boon_due(d: int) -> bool:
-	return not has_mod("godless") and d % BOON_EVERY == 0
+# ---------------------------------------------------------------- patron gifts and dawn
 
-## The next boon night: tonight or later by day, and always a later night on the
+## Whether surviving night d earns a patron gift: night 1, then every GIFT_EVERY nights.
+func gift_due(d: int) -> bool:
+	return not has_mod("godless") and d >= 1 and (d - 1) % GIFT_EVERY == 0 and d < WIN_NIGHT
+
+## The next gift night: tonight or later by day, and always a later night on the
 ## after-battle screen (which only asks when tonight wasn't one).
-func next_boon_night() -> int:
-	return ceili(day / float(BOON_EVERY)) * BOON_EVERY
+func next_gift_night() -> int:
+	return 1 if day <= 1 else ceili((day - 1) / float(GIFT_EVERY)) * GIFT_EVERY + 1
 
-func boon_ok(id: String) -> bool:
+func gift_ok(id: String) -> bool:
+	if id in gifts:
+		return false
 	match id:
 		"rituals": return b.cd < 1
 		"owl": return b.hours < 2
+		"bloodpact": return mmax > 25
 	return true
 
-func apply_boon(id: String) -> void:
+func apply_gift(id: String) -> void:
+	var G := Data.gift_by_id(id)
+	if G.is_empty():
+		return
+	gifts.append(id)
+	taken.append(G.name)
 	match id:
 		"hide":
 			mmax += 20
@@ -1155,29 +1489,46 @@ func apply_boon(id: String) -> void:
 			add_minion("ogre", true)
 			add_minion("goblin", true)
 			add_minion("goblin", true)
+		"bloodpact":
+			b.atk += 7
+			mmax -= 15
+			mhp = mini(mhp, mmax)
+		"cursed": b.greed += 0.5
+		"blessed": add_item(random_item("weapon", 3, 3))
+		"tome":
+			_recalc()   # the extra charge counts for these two
+			add_item(random_item("scroll", 2))
+			add_item(random_item("scroll", 2))
+		"warband":
+			for m in minions:
+				if item_of(m, "weapon") == "":
+					_slots(m).weapon = random_item("weapon", 1, 1)
+	_recalc()
 
-func boon_choices() -> Array:
+## Up to three gifts the patron offers, none taken before.
+func gift_choices() -> Array:
 	var avail := []
-	for o in Data.BOONS:
-		if boon_ok(o.id):
+	for o in Data.GIFTS:
+		if gift_ok(o.id):
 			avail.append(o)
 	avail.shuffle()
 	return avail.slice(0, 3)
 
-func dawn(boon: Dictionary) -> void:
+func dawn(gift: Dictionary) -> void:
+	_note_nights()
 	if is_boss_night(day):
 		bosses += 1
 		add_log("The boss is dead. The earth trembles: you can expand your dungeon by one row or column.", "info")
 	day += 1
-	if not boon.is_empty():
-		apply_boon(boon.id)
-		taken.append(boon.name)
-	var tg := Data.treasury_gold(lvl("treasury"))
-	var heal := Data.larder_heal(lvl("larder"))
-	var tribute := 5 if has_mod("lean") else 10
+	if not gift.is_empty():
+		apply_gift(gift.id)
+	var interest := mini(25, gold * perk("interest") / 100)
+	var tg := Data.treasury_gold(lvl("treasury")) + fx("dawn_gold")
+	var heal := Data.larder_heal(lvl("larder")) + fx("dawn_heal")
+	var tribute := TRIBUTE / 2 if has_mod("lean") else TRIBUTE
 	if has_mod("norest"):
 		heal = 0
-	gold += tg + tribute
+	gold += tg + tribute + interest
 	mhp = mini(mmax, mhp + heal)
 	shp = mini(smax, shp + heal)
 	hours = day_hours()
@@ -1188,12 +1539,287 @@ func dawn(boon: Dictionary) -> void:
 		add_log("%d new minion%s move into your rooms to replace the fallen." % [back, "s" if back > 1 else ""], "info")
 	add_log("Dawn of day %d. Terrified villagers leave %d gold at the cave mouth.%s%s" % [day, tribute,
 		(" Treasury: +%d gold." % tg) if tg > 0 else "", (" Larder: +%d HP." % heal) if heal > 0 else ""], "info")
+	if interest > 0:
+		add_log("Your hoard grows by %d gold." % interest, "info")
+	for e in [["forge", "gear", "forges"], ["scribes", "scroll", "scribes"]]:
+		var l := lvl(e[0])
+		if l > 0 and day % maxi(1, 4 - l) == 0:
+			var it := random_item(e[1] if e[1] == "scroll" else ["weapon", "armor"].pick_random(), l)
+			add_item(it)
+			add_log("Your %s %s a %s." % [Data.ROOMS[e[0]].name, e[2], Data.ware_by_id(it).name], "info")
+	if trader_due(day):
+		trader = {}
+		_roll_trader()
+		add_log("A wandering trader has set up a stall at your gate. Gone by nightfall.", "info")
 	changed.emit()
 
 ## Keep enough upcoming raiding parties rolled for the Scrying Pool to show.
 func _fill_future() -> void:
 	while future.size() < maxi(2, lvl("scrying")):
 		future.append(make_party(day + future.size() + 1))
+
+# ---------------------------------------------------------------- the wandering trader
+# Visits every TRADER_EVERY days (not during the tutorial) and leaves at nightfall. Sells relics,
+# kept for the run, and wares, used at once.
+
+const TRADER_RELICS := 3
+const TRADER_WARES := 2
+## Gold to roll a new stock; each haggle the same visit costs HAGGLE_STEP more.
+const HAGGLE_GOLD := 10
+const HAGGLE_STEP := 5
+
+func trader_due(d: int) -> bool:
+	return tut < 0 and d % TRADER_EVERY == 0 and d <= WIN_NIGHT
+
+## Whether the trader is at the gate today.
+func trader_here() -> bool:
+	return int(trader.get("day", -1)) == day and not trader.get("stock", []).is_empty()
+
+func next_trader_day() -> int:
+	var d := day + 1
+	while d % TRADER_EVERY != 0:
+		d += 1
+	return d
+
+func _roll_trader() -> void:
+	var rel := []
+	for r in Data.RELICS:
+		if not owns(r.id):
+			rel.append(r.id)
+	rel.shuffle()
+	var wares := []
+	for w in Data.WARES:
+		wares.append(w.id)
+	wares.shuffle()
+	var stock := []
+	var top := 3 if day >= 20 else 2
+	var arms := [random_item("weapon", top), random_item("armor", top), random_item("scroll", top)]
+	for id in rel.slice(0, TRADER_RELICS + perk("trader_slots")) + arms + wares.slice(0, TRADER_WARES):
+		stock.append({"id": id, "sold": false})
+	trader = {"day": day, "stock": stock, "haggles": int(trader.get("haggles", 0))}
+
+## Price of a relic or ware today: a little dearer each night, less any discounts.
+func ware_price(id: String) -> int:
+	var c: float = Data.ware_by_id(id).get("cost", 0) * (1.0 + 0.015 * (day - 1))
+	return maxi(1, roundi(c * (1.0 - minf(0.6, perk("trader_disc") / 100.0))))
+
+func haggle_cost() -> int:
+	return HAGGLE_GOLD + HAGGLE_STEP * int(trader.get("haggles", 0))
+
+## Rolls a fresh stock for gold.
+func haggle() -> bool:
+	if not trader_here() or gold < haggle_cost():
+		return false
+	gold -= haggle_cost()
+	trader.haggles = int(trader.get("haggles", 0)) + 1
+	_roll_trader()
+	changed.emit()
+	return true
+
+func is_relic(id: String) -> bool:
+	return Data.slot_of(id) == "relic"
+
+func can_buy(i: int) -> bool:
+	if not trader_here() or i < 0 or i >= trader.stock.size():
+		return false
+	var e: Dictionary = trader.stock[i]
+	return not e.sold and gold >= ware_price(e.id) and ware_useful(e.id)
+
+## Wares that would do nothing right now can't be bought.
+func ware_useful(id: String) -> bool:
+	match id:
+		"draught": return mhp < mmax or shp < smax
+		"mortar":
+			for si in slots.size():
+				if broken_count(si) > 0:
+					return true
+			return false
+	return true
+
+func buy(i: int) -> bool:
+	if not can_buy(i):
+		return false
+	var e: Dictionary = trader.stock[i]
+	var id: String = e.id
+	gold -= ware_price(id)
+	e.sold = true
+	var nm: String = Data.ware_by_id(id).name
+	if is_relic(id) or is_item(id):
+		add_item(id)
+	else:
+		match id:
+			"draught":
+				mhp = mini(mmax, mhp + 30)
+				shp = mini(smax, shp + 30)
+			"ale": hours += 1
+			"elixir":
+				mmax += 8
+				mhp += 8
+				if duo():
+					smax += 8
+					shp += 8
+			"sellsword": add_minion("ogre", true)
+			"souljar": souls += 8
+			"mortar": _mend_all()
+	add_log("You buy the %s from the wandering trader." % nm, "info")
+	changed.emit()
+	return true
+
+# ---------------------------------------------------------------- weapons and scrolls
+# Weapons sit in the armory (stash) until you hand one to your monster, Squire or a minion.
+# Scrolls go straight onto the spell bar with a few charges. Heroes drop both; the trader sells
+# them; the War Forge and Scriptorium make them; some patron gifts grant them.
+
+## Scrolls you can carry at once. Any more are sold on for half their price.
+const SCROLL_CAP := 4
+
+## Weapons, armor and scrolls (relics are their own thing at the trader).
+func is_item(id: String) -> bool:
+	return Data.slot_of(id) in ["weapon", "armor", "scroll"]
+
+const GEAR_SLOTS := ["weapon", "armor", "relic"]
+
+## A random id of a kind ("weapon", "armor", "scroll") of tier lo to hi, rarer tiers less likely.
+func random_item(kind: String, hi: int, lo := 1) -> String:
+	var pool := []
+	var src: Array = {"weapon": Data.WEAPONS, "armor": Data.ARMOR, "scroll": Data.SCROLLS}.get(kind, [])
+	for it in src:
+		var t := int(it.tier)
+		if t >= lo and t <= hi:
+			for n in 4 - t:   # common things turn up more
+				pool.append(it.id)
+	return pool.pick_random() if not pool.is_empty() else ""
+
+## Gold an item sells for: a third of its price.
+func scrap_value(id: String) -> int:
+	return maxi(1, int(Data.ware_by_id(id).get("cost", 0)) / 3)
+
+## Puts a found or bought item away: scrolls on the bar, gear in the armory. Gear goes straight
+## onto your monster if that slot of its is empty.
+func add_item(id: String) -> void:
+	if id == "":
+		return
+	var sc := Data.scroll_by_id(id)
+	if sc.is_empty():
+		stash.append(id)
+		var slot := Data.slot_of(id)
+		if slot != "" and item_of("monster", slot) == "" and not ("lord" in down):
+			equip("monster", stash.size() - 1)
+		return
+	if scrolls.size() >= SCROLL_CAP:
+		var g := maxi(1, int(sc.cost) / 2)
+		gold += g
+		add_log("You can carry no more scrolls: the %s sells for %d gold." % [sc.name, g], "info")
+		return
+	scrolls.append({"id": id, "ch": int(sc.charges) + perk("scroll_charges")})
+
+## The slot dictionary of who: "monster", "squire" or a minion dictionary.
+func _slots(who) -> Dictionary:
+	if who is Dictionary:
+		if not who.get("gear") is Dictionary:
+			who.gear = {}
+		return who.gear
+	if not gear.get(who) is Dictionary:
+		gear[who] = {}
+	return gear[who]
+
+## The id who carries in a slot ("weapon", "armor" or "relic"), or "".
+func item_of(who, slot: String) -> String:
+	return str(_slots(who).get(slot, ""))
+
+## Every relic someone carries. Each works for the whole lair.
+func carried_relics() -> Array:
+	var o := []
+	for who in ["monster", "squire"]:
+		var r := item_of(who, "relic")
+		if r != "":
+			o.append(r)
+	for m in minions:
+		var r := item_of(m, "relic")
+		if r != "":
+			o.append(r)
+	return o
+
+## Whether you have this item anywhere: carried or in the armory.
+func owns(id: String) -> bool:
+	return id in stash or id in carried_relics() or _carried_anywhere(id)
+
+func _carried_anywhere(id: String) -> bool:
+	for who in ["monster", "squire"]:
+		if id in _slots(who).values():
+			return true
+	for m in minions:
+		if id in _slots(m).values():
+			return true
+	return false
+
+## Hands item i of the armory to who, in its slot. Whatever was there goes back to the armory.
+func equip(who, i: int) -> void:
+	if i < 0 or i >= stash.size():
+		return
+	var id: String = stash[i]
+	var slot := Data.slot_of(id)
+	if not slot in GEAR_SLOTS:
+		return
+	stash.remove_at(i)
+	var old := item_of(who, slot)
+	if old != "":
+		stash.append(old)
+	_slots(who)[slot] = id
+	_recalc()
+	changed.emit()
+
+func unequip(who, slot: String) -> void:
+	var old := item_of(who, slot)
+	if old == "":
+		return
+	stash.append(old)
+	_slots(who).erase(slot)
+	_recalc()
+	changed.emit()
+
+## Sells item i of the armory.
+func scrap(i: int) -> void:
+	if i < 0 or i >= stash.size():
+		return
+	var id: String = stash[i]
+	stash.remove_at(i)
+	gold += scrap_value(id)
+	add_log("You sell the %s for %d gold." % [Data.ware_by_id(id).name, scrap_value(id)])
+	changed.emit()
+
+## Armory indices of one kind of item, for the sorted lists.
+func stash_of(slot: String) -> Array:
+	var o := []
+	for i in stash.size():
+		if Data.slot_of(stash[i]) == slot:
+			o.append(i)
+	return o
+
+func drop_scroll(i: int) -> void:
+	if i >= 0 and i < scrolls.size():
+		scrolls.remove_at(i)
+		changed.emit()
+
+## The chance in 100 that a slain hero drops gear. Bosses always do.
+func drop_chance(hero: Dictionary) -> int:
+	if hero.get("boss", false):
+		return 100
+	return 8 + (6 if is_company(day) else 0) + fx("drop_pct")
+
+## What a slain hero drops: casters favor scrolls, archers bows, bosses the best.
+func hero_drop(kind: String) -> String:
+	var boss: bool = Data.UNITS[kind].get("boss", false)
+	var hi := 3 if boss or day >= 25 else (2 if day >= 8 else 1)
+	var lo := 2 if boss else 1
+	if kind in ["mage", "cleric"] and randi() % 100 < 70:
+		return random_item("scroll", hi, lo)
+	if kind == "archer" and randi() % 2 == 0:
+		return "longbow" if hi >= 2 else "shortbow"
+	if kind == "paladin" and randi() % 3 == 0:
+		return "oathblade"
+	var r := randi() % 100
+	return random_item("scroll" if r < 20 else ("armor" if r < 55 else "weapon"), hi, lo)
 
 ## Souls a won run banks on top of the usual tally, before Dread.
 const WIN_SOULS := 100

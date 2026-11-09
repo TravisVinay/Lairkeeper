@@ -471,6 +471,16 @@ func _draw_day_overlay() -> void:
 					draw_rect(Rect2(p.x * T + 3, p.y * T + 3, T - 6, T - 6), Data.col("#b89cff", 1.0 if p == Game.decor_pick else 0.45), false, 3.0)
 				elif Game.decor_pick != null and Game.decor_spot_ok(p):
 					draw_rect(Rect2(p.x * T + 4, p.y * T + 4, T - 8, T - 8), tint)
+	# arranging traps: every trap outlined, the picked one bright, and free tiles tinted
+	if Game.arrange == "traps":
+		var tt := Data.col("#e4a648", 0.18 + sin(now * 4.0) * 0.06)
+		for y in Game.BH:
+			for x in Game.BW:
+				var p := Vector2i(x, y)
+				if Game.traps.has(p):
+					draw_rect(Rect2(p.x * T + 3, p.y * T + 3, T - 6, T - 6), Data.col("#e4a648", 1.0 if p == Game.trap_pick else 0.45), false, 3.0)
+				elif Game.trap_pick != null and Game.trap_spot_ok(p):
+					draw_rect(Rect2(p.x * T + 4, p.y * T + 4, T - 8, T - 8), tt)
 	# arranging minions: a ring on each one so they're easy to find
 	if Game.arrange == "minions":
 		for m in Game.minions:
@@ -489,7 +499,7 @@ func _draw_day_overlay() -> void:
 	if not Game.in_b(hover):
 		return
 	if Game.trap_mode != "" or Game.sel_minion != null or Game.ent_mode or Game.arrange != "":
-		var c := Data.col("#e4a648") if Game.trap_mode != "" else (Data.col("#ffd090") if Game.ent_mode else (Data.col("#b89cff") if Game.arrange == "furniture" else Data.col("#86b35e")))
+		var c := Data.col("#e4a648") if Game.trap_mode != "" else (Data.col("#ffd090") if Game.ent_mode else (Data.col("#b89cff") if Game.arrange == "furniture" else (Data.col("#e4a648") if Game.arrange == "traps" else Data.col("#86b35e"))))
 		draw_rect(Rect2(hover.x * T + 3, hover.y * T + 3, T - 6, T - 6), c, false, 3.0)
 	else:
 		var o := Vector2(Game.slot_xy(Game.slot_of(hover)) * Game.RS) * T
